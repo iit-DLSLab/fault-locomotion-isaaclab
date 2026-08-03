@@ -36,8 +36,8 @@ python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=
 python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16
 ```
 
-## Use Mixture-of-Experts or Morphological Symmetries, DAGGER or Depth to Heightmap
-Each of these modules as a specific README in its own script folder.
+## Use Mixture-of-Experts or Morphological Symmetries
+Each of these modules has a specific README in its own script folder.
 
 ## Run Hyperparameter Search
 
