@@ -16,7 +16,7 @@ sudo apt install git-lfs
 python -m pip install -e source/fault_locomotion_isaaclab
 ```
 
-5. If you want to play with [Mixture-of-Experts](https://arxiv.org/pdf/2606.25965), install the repo [moe-rsl-rl](https://github.com/iit-DLSLab/moe-rsl-rl)
+5. If you want to play with [Mixture-of-Experts](https://arxiv.org/pdf/2606.25965), install the repo [moe-rsl-rl](https://github.com/iit-DLSLab/moe-rsl-rl). If you want to use [Morphological Symmetries](https://arxiv.org/pdf/2403.17320), install the repo [morphosymm-rl](https://github.com/iit-DLSLab/morphosymm-rl).
 
 
 ## Run a train/play in IsaacLab
@@ -29,23 +29,15 @@ python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs
 python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
 ```
 
-- To train with Mixture-of-Experts, modify the related rsl_rl_ppo_cfg.py file and 
-```bash
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 --headless
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 --headless
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
-```
-
 - To test the policy, you can press:
 ```bash
 python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Flat --num_envs=16
 python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16
 python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16
-
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=16
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16
 ```
+
+## Use Mixture-of-Experts or Morphological Symmetries, DAGGER or Depth to Heightmap
+Each of these modules as a specific README in its own script folder.
 
 ## Run Hyperparameter Search
 
