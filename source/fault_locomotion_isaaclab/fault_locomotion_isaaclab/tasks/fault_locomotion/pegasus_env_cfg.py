@@ -7,11 +7,15 @@ from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, MultiMeshRayCasterCameraCfg, TiledCameraCfg, patterns
-from isaaclab.sim import SimulationCfg, PhysxCfg
+from isaaclab.sim import SimulationCfg
+try:
+    from isaaclab.sim import PhysxCfg
+except ImportError:  # Isaac Lab 3.0: moved to isaaclab_physx
+    from isaaclab_physx.physics.physx_manager_cfg import PhysxCfg
 from isaaclab.envs import ViewerCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.sensors import ImuCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg, NoiseModelWithAdditiveBiasCfg
 
 from fault_locomotion_isaaclab.assets.pegasus_asset import PEGASUS_CFG 
@@ -219,7 +223,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
             dynamic_friction=1.0,
             restitution=0.0,
         ),
-        physx=PhysxCfg(
+        physics=PhysxCfg(
             gpu_max_rigid_contact_count=(2**23),
             gpu_max_rigid_patch_count=(2**23),
         ),
@@ -242,7 +246,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     height_scanner = RayCasterCfg(
         prim_path="/World/envs/env_.*/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-        #attach_yaw_only=True,
+        #ray_alignment="yaw",
         ray_alignment='yaw',
         #pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[1.4, 1.0]),
         pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[0.6, 0.6]),

@@ -81,7 +81,7 @@ def track_orientation_l2(self):
 
     terrain_roll = torch.zeros_like(terrain_pitch)
 
-    root_roll_w, root_pitch_w, _ = math_utils.euler_xyz_from_quat(self._robot.data.root_quat_w)
+    root_roll_w, root_pitch_w, _ = math_utils.euler_xyz_from_quat(self._robot.data.root_quat_w.torch)
     root_roll_w = torch.atan2(torch.sin(root_roll_w), torch.cos(root_roll_w))
     root_pitch_w = torch.atan2(torch.sin(root_pitch_w), torch.cos(root_pitch_w))
 
@@ -512,7 +512,7 @@ def feet_to_hip_distance_l2(self):
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    ROT_W2H = math_utils.matrix_from_quat(math_utils.yaw_quat(self._robot.data.root_quat_w))
+    ROT_W2H = math_utils.matrix_from_quat(math_utils.yaw_quat(self._robot.data.root_quat_w.torch))
     feet_to_base_w = self._robot.data.body_pos_w[:, self._feet_ids_robot, :3] - self._robot.data.root_state_w[
         :, :3
     ].unsqueeze(1)

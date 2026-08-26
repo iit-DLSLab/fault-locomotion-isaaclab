@@ -21,7 +21,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns, Imu
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 try:
     from .. import custom_rewards, custom_events, custom_observations
@@ -63,7 +63,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             dtype=torch.long,
             device=self.device,
         )
-        self._body_masses = self._robot.root_physx_view.get_masses().clone().to(self.device)
+        self._body_masses = torch.as_tensor(self._robot.root_physx_view.get_masses()).float().to(self.device)  # 3.0: warp array, not tensor
         
         # Periodic gait
         self._step_freq = torch.tensor(self.cfg.desired_step_freq, device=self.device)
@@ -218,7 +218,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
         
         # clone, filter, and replicate
-        self.scene.clone_environments(copy_from_source=False)
+        if hasattr(self.scene, "clone_environments"):
+            self.scene.clone_environments(copy_from_source=False)  # Isaac Lab 3.0 clones automatically
         self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         
         # add lights
@@ -333,12 +334,12 @@ class FaultLocomotionEnv(DirectRLEnv):
             # If Concurrent SE/Learned State Estimator, we predict linear and angular vel from IMU
             velocity_b = custom_observations._get_concurrent_state_estimation(self)
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._imu.data.projected_gravity_b
+            projected_gravity_b = self._robot.data.projected_gravity_b
         elif(self.cfg.use_imu):
             # Using directly the IMU
             velocity_b = self._imu.data.lin_acc_b
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._imu.data.projected_gravity_b
+            projected_gravity_b = self._robot.data.projected_gravity_b
         else:
             #Using a model-based state estimation
             velocity_b = self._robot.data.root_lin_vel_b
@@ -390,6 +391,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Critic OBS could be different if needed
         if(self.cfg.use_asymmetric_ppo):
             obs_critic = custom_observations._get_privileged_observation(self)
+            # Isaac Lab 3.0 port: guard privileged obs (height scan rays can be inf/nan)
+            obs_critic = torch.nan_to_num(obs_critic, nan=0.0, posinf=1.0, neginf=-1.0)
             observations["critic"] = torch.cat((obs, obs_critic), dim=-1)
 
 
@@ -537,8 +540,16 @@ class FaultLocomotionEnv(DirectRLEnv):
 
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
+        # Isaac Lab 3.0 compat: ids may arrive (or _ALL_INDICES may be) warp arrays
+        def _to_torch_ids(ids):
+            if ids is not None and not torch.is_tensor(ids):
+                import warp as wp
+                ids = wp.to_torch(ids)
+            return ids.to(dtype=torch.long) if ids is not None else ids
+
+        env_ids = _to_torch_ids(env_ids)
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self._robot._ALL_INDICES
+            env_ids = _to_torch_ids(self._robot._ALL_INDICES)
             
             # Assignment of the failure case. We may want to assign them completely random,
             # or reserving some fixed number to some cases
