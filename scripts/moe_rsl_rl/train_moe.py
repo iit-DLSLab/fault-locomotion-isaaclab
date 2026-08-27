@@ -10,9 +10,6 @@
 import argparse
 import sys
 
-# Import here to avoid the pinocchio error if morphosymm import it after the import of AppLauncher.
-import pinocchio as pin
-
 from isaaclab.app import AppLauncher
 
 # local imports
@@ -86,6 +83,7 @@ import torch
 from datetime import datetime
 
 from rsl_rl.runners import DistillationRunner, OnPolicyRunner
+from moe_rsl_rl.runners.moe_on_policy_runner import MoEOnPolicyRunner
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -115,15 +113,15 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
-# from rsl_rl.runners import OnPolicyRunner
-from moe_rsl_rl.runners.moe_on_policy_runner import MoEOnPolicyRunner
-
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     """Train with RSL-RL agent."""
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    # Isaac Lab 3.0 / rsl-rl 5.x port: migrate deprecated cfg fields (stochastic, init_noise_std, policy)
+    from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, installed_version)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
@@ -201,7 +199,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
-    # create runner from rsl-rl
+    # create runner from moe-rsl-rl
     runner = MoEOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
     
     # write git state to logs

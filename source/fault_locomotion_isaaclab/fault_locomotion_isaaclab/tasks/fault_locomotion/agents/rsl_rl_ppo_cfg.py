@@ -68,6 +68,7 @@ class RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         activation="elu",
         obs_normalization=False,
         distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+        #distribution_cfg=RslRlMLPModelCfg.BetaDistribution(action_range=[-3.0, 3.0])
     )
     critic = RslRlMLPModelCfg(
         hidden_dims=[128, 128, 128],
