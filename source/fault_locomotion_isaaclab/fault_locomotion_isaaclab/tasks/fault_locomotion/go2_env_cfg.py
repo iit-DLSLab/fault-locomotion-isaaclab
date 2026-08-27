@@ -125,7 +125,7 @@ class PhysicsCfg(PresetCfg):
             njmax=150,
             nconmax=50,
             cone="elliptic",
-            impratio=100.0,
+            impratio=1.0,
         ),
         num_substeps=1,
         debug_mode=False,

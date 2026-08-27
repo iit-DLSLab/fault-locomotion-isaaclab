@@ -106,6 +106,10 @@ def randomize_joint_parameters(
         else:
             asset.write_joint_friction_coefficient_to_sim_index(
                 joint_friction_coeff=static_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
+            asset.write_joint_viscous_friction_coefficient_to_sim_index(
                 joint_viscous_friction_coeff=viscous_friction_coeff,
                 joint_ids=joint_ids,
                 env_ids=env_ids,
