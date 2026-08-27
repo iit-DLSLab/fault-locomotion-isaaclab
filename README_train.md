@@ -46,5 +46,5 @@ echo "import ray; ray.init(); import time; [time.sleep(10) for _ in iter(int, 1)
 ```
 
 ```bash
-python3 ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/tuner.py --run_mode local --cfg_file ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/locomotion_aliengo_cfg.py --cfg_class LocomotionAliengoFlatTuner (TERMINAL 2)
+python3 ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/tuner.py --run_mode local --cfg_file ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/locomotion_tuning_cfg.py --cfg_class LocomotionGo2FlatTuner (TERMINAL 2)
 ```

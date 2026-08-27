@@ -93,14 +93,23 @@ def randomize_joint_parameters(
         viscous_friction_coeff = viscous_friction_coeff[env_ids_for_slice, joint_ids]
 
 
-        # Single write call for all versions
-        asset.write_joint_friction_coefficient_to_sim(
-            joint_friction_coeff=static_friction_coeff,
-            joint_dynamic_friction_coeff=static_friction_coeff,
-            joint_viscous_friction_coeff=viscous_friction_coeff,
-            joint_ids=joint_ids,
-            env_ids=env_ids,
-        )
+        # Newton exposes a single dry-friction value, while PhysX backends also
+        # provide a separate dynamic-friction coefficient.
+        if hasattr(asset, "write_joint_dynamic_friction_coefficient_to_sim_index"):
+            asset.write_joint_friction_coefficient_to_sim_index(
+                joint_friction_coeff=static_friction_coeff,
+                joint_dynamic_friction_coeff=static_friction_coeff,
+                joint_viscous_friction_coeff=viscous_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
+        else:
+            asset.write_joint_friction_coefficient_to_sim_index(
+                joint_friction_coeff=static_friction_coeff,
+                joint_viscous_friction_coeff=viscous_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
 
     # joint armature
     if armature_distribution_params is not None:
@@ -112,27 +121,26 @@ def randomize_joint_parameters(
             operation=operation,
             distribution=distribution,
         )
-        asset.write_joint_armature_to_sim(
-            armature[env_ids_for_slice, joint_ids], joint_ids=joint_ids, env_ids=env_ids
+        asset.write_joint_armature_to_sim_index(
+            armature=armature[env_ids_for_slice, joint_ids], joint_ids=joint_ids, env_ids=env_ids
         )
 
 
-def _restore_default_actuator_gains(self, asset: Articulation, env_ids: torch.Tensor):
+def _restore_healthy_actuator_gains(self, asset: Articulation, env_ids: torch.Tensor):
     for joint_type in ("hip", "thigh", "calf"):
-        joint_ids = self._actuator_joint_ids[joint_type]
         actuator = asset.actuators[joint_type]
-        actuator.stiffness[env_ids] = asset.data.default_joint_stiffness[env_ids][:, joint_ids]
-        actuator.damping[env_ids] = asset.data.default_joint_damping[env_ids][:, joint_ids]
+        actuator.stiffness[env_ids] = self._healthy_actuator_stiffness[joint_type][env_ids]
+        actuator.damping[env_ids] = self._healthy_actuator_damping[joint_type][env_ids]
 
 
 def _failures_event_setter(self, env_ids, failure_type):
     # Restore any prior per-joint torque scaling state for THIS reset batch.
     self._per_leg_joint_status[env_ids, :, :] = 1.0
 
-    # Restore default joint gains for THIS reset batch before applying any failure.
+    # Restore the healthy (possibly randomized) Pace gains before applying a failure.
     asset_cfg = SceneEntityCfg("robot", joint_names=[".*"])
     asset: Articulation = self.scene[asset_cfg.name]
-    _restore_default_actuator_gains(self, asset, env_ids)
+    _restore_healthy_actuator_gains(self, asset, env_ids)
 
     FL_hip = self._actuator_leg_ids["hip"]["FL"]
     FR_hip = self._actuator_leg_ids["hip"]["FR"]
@@ -153,8 +161,6 @@ def _failures_event_setter(self, env_ids, failure_type):
     fine_mask = failure_type[env_ids] == 0
     if torch.any(fine_mask):
         normal_envs = env_ids[fine_mask]
-
-        _restore_default_actuator_gains(self, asset, normal_envs)
 
         # Reset mask for non-failed envs
         self._per_leg_joint_status[normal_envs, :, :] = 1.0

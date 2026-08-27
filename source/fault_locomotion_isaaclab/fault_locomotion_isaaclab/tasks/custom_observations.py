@@ -116,22 +116,38 @@ def _get_rma(self):
     return obs_rma
 
 
+def _normalize_actuator_gain(gain: torch.Tensor, nominal_gain: torch.Tensor) -> torch.Tensor:
+    """Normalize an explicit actuator gain without dividing by a zero nominal gain."""
+    valid = nominal_gain.abs() > torch.finfo(nominal_gain.dtype).eps
+    denominator = torch.where(valid, nominal_gain, torch.ones_like(nominal_gain))
+    return torch.where(valid, gain / denominator, torch.zeros_like(gain))
+
+
 def _get_privileged_observation(self):
 
     asset_cfg = SceneEntityCfg("robot", joint_names=[".*"])
     asset: Articulation = self.scene[asset_cfg.name]
 
     # PD of the joints
-    hip_stiffness = asset.actuators["hip"].stiffness
-    thigh_stiffness = asset.actuators["thigh"].stiffness
-    calf_stiffness = asset.actuators["calf"].stiffness
+    hip_stiffness = _normalize_actuator_gain(
+        asset.actuators["hip"].stiffness, self._nominal_actuator_stiffness["hip"]
+    )
+    thigh_stiffness = _normalize_actuator_gain(
+        asset.actuators["thigh"].stiffness, self._nominal_actuator_stiffness["thigh"]
+    )
+    calf_stiffness = _normalize_actuator_gain(
+        asset.actuators["calf"].stiffness, self._nominal_actuator_stiffness["calf"]
+    )
 
-    hip_damping = asset.actuators["hip"].damping
-    thigh_damping = asset.actuators["thigh"].damping
-    calf_damping = asset.actuators["calf"].damping
-
-    default_stiffness = asset.data.default_joint_stiffness[0][0]
-    default_damping = asset.data.default_joint_damping[0][0]
+    hip_damping = _normalize_actuator_gain(
+        asset.actuators["hip"].damping, self._nominal_actuator_damping["hip"]
+    )
+    thigh_damping = _normalize_actuator_gain(
+        asset.actuators["thigh"].damping, self._nominal_actuator_damping["thigh"]
+    )
+    calf_damping = _normalize_actuator_gain(
+        asset.actuators["calf"].damping, self._nominal_actuator_damping["calf"]
+    )
 
     # height error
     height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
@@ -175,8 +191,8 @@ def _get_privileged_observation(self):
     current_contact_time = torch.clip(current_contact_time, max=1.0)*legs_status
 
     obs_privileged = torch.cat((
-                        hip_stiffness/default_stiffness, thigh_stiffness/default_stiffness, calf_stiffness/default_stiffness, #P gain
-                        hip_damping/default_damping, thigh_damping/default_damping, calf_damping/default_damping, #D gain
+                        hip_stiffness, thigh_stiffness, calf_stiffness, #P gain
+                        hip_damping, thigh_damping, calf_damping, #D gain
                         height_error.unsqueeze(1),
                         terrain_pitch.unsqueeze(1),
                         contacts_foot,

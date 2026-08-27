@@ -23,13 +23,14 @@ from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils.configclass import configclass
 
+from isaaclab import cloner
+
 try:
     from .. import custom_rewards, custom_events, custom_observations
 except Exception:
     from fault_locomotion_isaaclab.tasks import custom_rewards, custom_events, custom_observations
 
 
-from .aliengo_env_cfg import AliengoFlatEnvCfg, AliengoRoughBlindEnvCfg, AliengoRoughVisionEnvCfg
 from .go2_env_cfg import Go2FlatEnvCfg, Go2RoughVisionEnvCfg, Go2RoughBlindEnvCfg
 from .pegasus_env_cfg import PegasusFlatEnvCfg, PegasusRoughVisionEnvCfg, PegasusRoughBlindEnvCfg
 
@@ -63,7 +64,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             dtype=torch.long,
             device=self.device,
         )
-        self._body_masses = torch.as_tensor(self._robot.root_physx_view.get_masses()).float().to(self.device)  # 3.0: warp array, not tensor
+        self._body_masses = self._robot.data.body_mass.torch.clone()
         
         # Periodic gait
         self._step_freq = torch.tensor(self.cfg.desired_step_freq, device=self.device)
@@ -182,6 +183,10 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         self._actuator_joint_ids = {}
         self._actuator_leg_ids = {}
+        self._nominal_actuator_stiffness = {}
+        self._nominal_actuator_damping = {}
+        self._healthy_actuator_stiffness = {}
+        self._healthy_actuator_damping = {}
         for joint_type in ("hip", "thigh", "calf"):
             actuator = self._robot.actuators[joint_type]
             if isinstance(actuator.joint_indices, slice):
@@ -192,6 +197,10 @@ class FaultLocomotionEnv(DirectRLEnv):
             self._actuator_leg_ids[joint_type] = {
                 leg: actuator.joint_names.index(f"{leg}_{joint_type}_joint") for leg in ("FL", "FR", "RL", "RR")
             }
+            self._nominal_actuator_stiffness[joint_type] = actuator.stiffness.clone()
+            self._nominal_actuator_damping[joint_type] = actuator.damping.clone()
+            self._healthy_actuator_stiffness[joint_type] = actuator.stiffness.clone()
+            self._healthy_actuator_damping[joint_type] = actuator.damping.clone()
 
 
     def _setup_scene(self):
@@ -217,10 +226,17 @@ class FaultLocomotionEnv(DirectRLEnv):
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
         
-        # clone, filter, and replicate
-        if hasattr(self.scene, "clone_environments"):
-            self.scene.clone_environments(copy_from_source=False)  # Isaac Lab 3.0 clones automatically
-        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        # clone and replicate environments
+        src, dest = "/World/envs/env_0", "/World/envs/env_{}"
+        positions = cloner.grid_transforms(
+            self.scene.num_envs, self.scene.cfg.env_spacing, device=self.device
+        )[0]
+        plan = cloner.clone_plan_from_env_0(src, dest, self.scene.num_envs, self.device, positions)
+        cloner.replicate(plan, stage=self.scene.stage)
+
+        # PhysX replication requires explicit collision filtering between environments.
+        if "physx" in self.scene.physics_backend:
+            self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
@@ -391,8 +407,6 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Critic OBS could be different if needed
         if(self.cfg.use_asymmetric_ppo):
             obs_critic = custom_observations._get_privileged_observation(self)
-            # Isaac Lab 3.0 port: guard privileged obs (height scan rays can be inf/nan)
-            obs_critic = torch.nan_to_num(obs_critic, nan=0.0, posinf=1.0, neginf=-1.0)
             observations["critic"] = torch.cat((obs, obs_critic), dim=-1)
 
 
@@ -590,6 +604,16 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
+
+        # The reset events may randomize the explicit Pace actuator gains. Keep
+        # those healthy values so failure injection can temporarily zero and
+        # later restore individual joints without reading the solver PD gains,
+        # which are intentionally zero for explicit actuators.
+        for joint_type in ("hip", "thigh", "calf"):
+            actuator = self._robot.actuators[joint_type]
+            self._healthy_actuator_stiffness[joint_type][env_ids] = actuator.stiffness[env_ids]
+            self._healthy_actuator_damping[joint_type][env_ids] = actuator.damping[env_ids]
+
         if len(env_ids) == self.num_envs: 
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))

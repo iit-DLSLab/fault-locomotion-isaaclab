@@ -8,15 +8,18 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, MultiMeshRayCasterCameraCfg, TiledCameraCfg, patterns
 from isaaclab.sim import SimulationCfg
-try:
-    from isaaclab.sim import PhysxCfg
-except ImportError:  # Isaac Lab 3.0: moved to isaaclab_physx
-    from isaaclab_physx.physics.physx_manager_cfg import PhysxCfg
+
 from isaaclab.envs import ViewerCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.sensors import ImuCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg, NoiseModelWithAdditiveBiasCfg
+from isaaclab_tasks.utils import PresetCfg
+
+from isaaclab_newton.physics import KaminoPADMMSolverCfg, MJWarpSolverCfg, NewtonCfg
+from isaaclab_ov.physics import OvPhysxCfg
+from isaaclab_physx.physics import PhysxCfg
+from isaaclab.physics import PhysxAutoCfg
 
 from fault_locomotion_isaaclab.assets.go2_asset import GO2_CFG 
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG
@@ -110,6 +113,25 @@ class EventCfg:
                                    "roll": (-0.5, 0.5), "pitch": (-0.5, 0.5), "yaw": (-0.5, 0.5)}},
     )
 
+
+
+@configclass
+class PhysicsCfg(PresetCfg):
+    isaacsim_physx = PhysxCfg(gpu_max_rigid_patch_count=2**23)
+    ovphysx = OvPhysxCfg(gpu_max_rigid_patch_count=2**23)
+    physx = PhysxAutoCfg(isaacsim_physx=isaacsim_physx, ovphysx=ovphysx)
+    newton_mjwarp = NewtonCfg(
+        solver_cfg=MJWarpSolverCfg(
+            njmax=150,
+            nconmax=50,
+            cone="elliptic",
+            impratio=100.0,
+        ),
+        num_substeps=1,
+        debug_mode=False,
+    )
+    newton_kamino = NewtonCfg(solver_cfg=KaminoPADMMSolverCfg(max_contacts_per_world=64))
+    default = physx
 
 
 
@@ -220,7 +242,6 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 200,
         render_interval=decimation,
-        #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -228,11 +249,9 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
             dynamic_friction=1.0,
             restitution=0.0,
         ),
-        physics=PhysxCfg(
-            gpu_max_rigid_contact_count=(2**23),
-            gpu_max_rigid_patch_count=(2**23),
-        ),
+        physics=PhysicsCfg(),
     )
+
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
@@ -265,7 +284,8 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
         offset=ImuCfg.OffsetCfg(
             pos=(-0.02557, 0, 0.04232)
         ), 
-        debug_vis=False)
+        debug_vis=False
+    )
 
 
     # scene
@@ -427,10 +447,7 @@ class Go2RoughBlindEnvCfg(Go2FlatEnvCfg):
                 proportion=0.2
             ),
             "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-                proportion=0.1, grid_width=0.45, grid_height_range=(0.02, 0.10), platform_width=2.0,
-            ),
-            "star": terrain_gen.MeshStarTerrainCfg(
-                proportion=0.1, num_bars=10, bar_width_range=(0.15, 0.20), bar_height_range=(0.05, 0.15), platform_width=2.0,
+                proportion=0.2, grid_width=0.45, grid_height_range=(0.02, 0.10), platform_width=2.0,
             ),
             "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
                 proportion=0.1, noise_range=(0.02, 0.06), noise_step=0.02, border_width=0.25

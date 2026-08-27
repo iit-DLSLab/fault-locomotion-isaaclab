@@ -44,7 +44,7 @@ Usage:
     (TERMINAL 2)
     python3 ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/tuner.py \
         --run_mode local --cfg_file ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/locomotion_tuning_cfg.py \
-        --cfg_class LocomotionAliengoFlatTuner \
+        --cfg_class LocomotionGo2FlatTuner \
         --workflow ../fault_locomotion_isaaclab/scripts/rsl_rl/train.py \
         --metric Train/mean_reward
 

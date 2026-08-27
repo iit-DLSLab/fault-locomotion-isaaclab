@@ -8,15 +8,17 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, MultiMeshRayCasterCameraCfg, TiledCameraCfg, patterns
 from isaaclab.sim import SimulationCfg
-try:
-    from isaaclab.sim import PhysxCfg
-except ImportError:  # Isaac Lab 3.0: moved to isaaclab_physx
-    from isaaclab_physx.physics.physx_manager_cfg import PhysxCfg
 from isaaclab.envs import ViewerCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.sensors import ImuCfg
 from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg, NoiseModelWithAdditiveBiasCfg
+from isaaclab_tasks.utils import PresetCfg
+
+from isaaclab_newton.physics import KaminoPADMMSolverCfg, MJWarpSolverCfg, NewtonCfg
+from isaaclab_ov.physics import OvPhysxCfg
+from isaaclab_physx.physics import PhysxCfg
+from isaaclab.physics import PhysxAutoCfg
 
 from fault_locomotion_isaaclab.assets.pegasus_asset import PEGASUS_CFG 
 from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG
@@ -109,6 +111,25 @@ class EventCfg:
         params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "z": (-0.5, 0.5),
                                    "roll": (-0.5, 0.5), "pitch": (-0.5, 0.5), "yaw": (-0.5, 0.5)}},
     )
+
+
+@configclass
+class PhysicsCfg(PresetCfg):
+    isaacsim_physx = PhysxCfg(gpu_max_rigid_patch_count=2**23)
+    ovphysx = OvPhysxCfg(gpu_max_rigid_patch_count=2**23)
+    physx = PhysxAutoCfg(isaacsim_physx=isaacsim_physx, ovphysx=ovphysx)
+    newton_mjwarp = NewtonCfg(
+        solver_cfg=MJWarpSolverCfg(
+            njmax=60,
+            nconmax=25,
+            cone="elliptic",
+            impratio=100.0,
+        ),
+        num_substeps=1,
+        debug_mode=False,
+    )
+    newton_kamino = NewtonCfg(solver_cfg=KaminoPADMMSolverCfg(max_contacts_per_world=64))
+    default = newton_mjwarp
 
 
 
@@ -223,10 +244,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
             dynamic_friction=1.0,
             restitution=0.0,
         ),
-        physics=PhysxCfg(
-            gpu_max_rigid_contact_count=(2**23),
-            gpu_max_rigid_patch_count=(2**23),
-        ),
+        physics=PhysicsCfg(),
     )
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
