@@ -5,6 +5,8 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
+from . import custom_rewards
+
 
 def _get_concurrent_state_estimation(self):
     # Using a supervised learning state estimation
@@ -150,16 +152,16 @@ def _get_privileged_observation(self):
     )
 
     # height error
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
+    height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
     height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5) # Handle inf values
     mean_height_ray = torch.mean(height_data_scanner, dim=1)
     height_error = torch.abs(self.cfg.desired_base_height + mean_height_ray - self._robot.data.root_state_w[:, 2])
 
     # terrain orientation
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
-    height_map_y_points = int(round(self._height_scanner.cfg.pattern_cfg.size[1] / height_map_resolution))
+    height_map_resolution = self._pose_height_scanner.cfg.pattern_cfg.resolution
+    height_map_x_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
+    height_map_y_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[1] / height_map_resolution))
     distance_between_front_and_back = (height_map_x_points/2)* height_map_resolution
 
     cols_back = torch.arange(0, height_data_scanner.shape[1], height_map_x_points).unsqueeze(1) + torch.arange(int(height_map_x_points/2))
@@ -190,14 +192,32 @@ def _get_privileged_observation(self):
     current_contact_time = self._contact_sensor.data.current_contact_time[:, self._feet_contact_sensor_ids]
     current_contact_time = torch.clip(current_contact_time, max=1.0)*legs_status
 
+    # Foot height tracking error (per foot, relative to local terrain height; zeroed for failed legs)
+    feet_terrain_height = custom_rewards._get_feet_terrain_heights(self)
+    foot_error = torch.abs(
+        self.cfg.desired_feet_height + feet_terrain_height - self._robot.data.body_pos_w[:, self._feet_ids_robot, 2]
+    ) * legs_status
+
+    # Pose height scanner data
+    height_data = (
+        self._pose_height_scanner.data.pos_w[:, 2].unsqueeze(1)
+        - self._pose_height_scanner.data.ray_hits_w[..., 2]
+        - 0.5
+    )
+    height_data = torch.nan_to_num(height_data, nan=0.0, posinf=1.0, neginf=-1.0)
+    height_data = height_data.clip(-1.0, 1.0)
+
     obs_privileged = torch.cat((
                         hip_stiffness, thigh_stiffness, calf_stiffness, #P gain
                         hip_damping, thigh_damping, calf_damping, #D gain
+                        self._robot.data.root_lin_vel_b,
                         height_error.unsqueeze(1),
                         terrain_pitch.unsqueeze(1),
                         contacts_foot,
                         current_air_time,
                         current_contact_time,
+                        foot_error,
+                        height_data,
                         )
                     , dim=-1)
     return obs_privileged

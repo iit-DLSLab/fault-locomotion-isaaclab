@@ -235,6 +235,26 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
         rma_ep_saving_start = 12000
         rma_ep_saving_end = 16000
 
+    # Base-centered height scanner for pose-related rewards and privileged observations.
+    pose_height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/base",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+        ray_alignment='yaw',
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[0.6, 0.6]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
+    # Template copied onto each foot link to measure the terrain immediately around that foot.
+    foot_height_scanner = RayCasterCfg(
+        prim_path="/World/envs/env_.*/Robot/FL_foot",
+        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
+        ray_alignment="yaw",
+        pattern_cfg=patterns.GridPatternCfg(resolution=0.05, size=[0.1, 0.1]),
+        debug_vis=False,
+        mesh_prim_paths=["/World/ground"],
+    )
+
     # asymmetric ppo
     use_asymmetric_ppo = True
     if(use_asymmetric_ppo):
@@ -244,6 +264,13 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
         state_space += 2 #base pitch and height
         state_space += 3 #clean lin vel b
         state_space += 4 #contacts foot
+        state_space += 8 #feet air and contact time
+        state_space += 4 #foot error
+
+        pattern_cfg = pose_height_scanner.pattern_cfg
+        height_map_x_points = int(round(pattern_cfg.size[0] / pattern_cfg.resolution)) + 1
+        height_map_y_points = int(round(pattern_cfg.size[1] / pattern_cfg.resolution)) + 1
+        state_space += height_map_x_points * height_map_y_points
     else:
         state_space = 0
 
@@ -274,18 +301,6 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         debug_vis=False,
-    )
-
-    # we add a height scanner for perceptive locomotion
-    height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
-        offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-        #ray_alignment="yaw",
-        ray_alignment='yaw',
-        #pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[1.4, 1.0]),
-        pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[0.6, 0.6]),
-        debug_vis=False,
-        mesh_prim_paths=["/World/ground"],
     )
 
     # an imu sensor in case we don't want any state estimator (for now we can't use sites from the xml)
@@ -505,18 +520,18 @@ class Go2RoughBlindEnvCfg(Go2FlatEnvCfg):
 class Go2RoughVisionEnvCfg(Go2RoughBlindEnvCfg):
 
     def __post_init__(self) -> None:
-        height_map_x_points = int(round(self.height_scanner2.pattern_cfg.size[0] / self.height_scanner2.pattern_cfg.resolution)) + 1
-        height_map_y_points = int(round(self.height_scanner2.pattern_cfg.size[1] / self.height_scanner2.pattern_cfg.resolution)) + 1
+        pattern_cfg = self.perceptive_height_scanner.pattern_cfg
+        height_map_x_points = int(round(pattern_cfg.size[0] / pattern_cfg.resolution)) + 1
+        height_map_y_points = int(round(pattern_cfg.size[1] / pattern_cfg.resolution)) + 1
         self.observation_space = self.observation_space + height_map_x_points * height_map_y_points
 
     use_vision = True
 
 
     # we add a height scanner for perceptive locomotion
-    height_scanner2 = RayCasterCfg(
+    perceptive_height_scanner = RayCasterCfg(
         prim_path="/World/envs/env_.*/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
-        #ray_alignment="yaw",
         ray_alignment='yaw',
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.2, 1.2]),
         debug_vis=False,

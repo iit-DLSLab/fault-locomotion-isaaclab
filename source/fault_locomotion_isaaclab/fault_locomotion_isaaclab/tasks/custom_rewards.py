@@ -3,12 +3,23 @@ import torch
 import isaaclab.utils.math as math_utils
 
 
+def _get_feet_terrain_heights(self) -> torch.Tensor:
+    """Return the mean terrain height from the local height map around each foot."""
+    foot_height_maps = torch.stack(
+        [scanner.data.ray_hits_w[..., 2] for scanner in self._foot_height_scanners],
+        dim=1,
+    )
+    foot_height_maps = torch.nan_to_num(foot_height_maps, nan=0.0, posinf=1.0, neginf=-1.0)
+    foot_height_maps = torch.clip(foot_height_maps, min=-5, max=5)
+    return torch.mean(foot_height_maps, dim=-1)
+
+
 def track_height_exp(self):
     legs_status = (self._per_leg_joint_status.all(dim=2)).float()
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
+    height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
     height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5)
 
@@ -53,12 +64,12 @@ def track_orientation_l2(self):
     legs_down = ~legs_status.bool()
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
+    height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
     height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5)
 
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
+    height_map_resolution = self._pose_height_scanner.cfg.pattern_cfg.resolution
+    height_map_x_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
     distance_between_front_and_back = (height_map_x_points / 2) * height_map_resolution
 
     cols_back = torch.arange(0, height_data_scanner.shape[1], height_map_x_points).unsqueeze(1) + torch.arange(
@@ -359,27 +370,7 @@ def feet_height_clearance_aperiodic(self):
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
-    height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
-    height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5)
-
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
-
-    cols_back = torch.arange(0, height_data_scanner.shape[1], height_map_x_points).unsqueeze(1) + torch.arange(
-        int(height_map_x_points / 2)
-    )
-    cols_back = cols_back.flatten().to(height_data_scanner.device)
-    selected_height_data_back = height_data_scanner[:, cols_back]
-
-    cols_front = torch.arange(int(height_map_x_points / 2), height_data_scanner.shape[1], height_map_x_points).unsqueeze(
-        1
-    ) + torch.arange(int(height_map_x_points / 2))
-    cols_front = cols_front.flatten().to(height_data_scanner.device)
-    selected_height_data_front = height_data_scanner[:, cols_front]
-
-    mean_height_ray_front = torch.mean(selected_height_data_front, dim=1)
-    mean_height_ray_back = torch.mean(selected_height_data_back, dim=1)
+    feet_terrain_height = _get_feet_terrain_heights(self)
 
     should_move = torch.norm(self._commands[:, :3], dim=1) > 0.01
     self._contact_sensor.compute_first_contact(self.step_dt)[:, self._feet_contact_sensor_ids]
@@ -390,7 +381,7 @@ def feet_height_clearance_aperiodic(self):
     self._swing_peak = torch.max(self._swing_peak, self._robot.data.body_pos_w[:, self._feet_ids_robot, 2].clone())
     feet_z_target_error_aperiodic = (
         self.cfg.desired_feet_height
-        + torch.cat((mean_height_ray_front.unsqueeze(1).expand(-1, 2), mean_height_ray_back.unsqueeze(1).expand(-1, 2)), dim=1)
+        + feet_terrain_height
         - self._swing_peak
     )
     feet_z_target_error_aperiodic = torch.where(
@@ -425,33 +416,13 @@ def feet_height_clearance_periodic(self):
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
-    height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
-    height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5)
-
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
-
-    cols_back = torch.arange(0, height_data_scanner.shape[1], height_map_x_points).unsqueeze(1) + torch.arange(
-        int(height_map_x_points / 2)
-    )
-    cols_back = cols_back.flatten().to(height_data_scanner.device)
-    selected_height_data_back = height_data_scanner[:, cols_back]
-
-    cols_front = torch.arange(int(height_map_x_points / 2), height_data_scanner.shape[1], height_map_x_points).unsqueeze(
-        1
-    ) + torch.arange(int(height_map_x_points / 2))
-    cols_front = cols_front.flatten().to(height_data_scanner.device)
-    selected_height_data_front = height_data_scanner[:, cols_front]
-
-    mean_height_ray_front = torch.mean(selected_height_data_front, dim=1)
-    mean_height_ray_back = torch.mean(selected_height_data_back, dim=1)
+    feet_terrain_height = _get_feet_terrain_heights(self)
 
     should_move = torch.norm(self._commands[:, :3], dim=1) > 0.01
     contact_periodic_on = self._phase_signal < self._duty_factor
     feet_z_target_error_periodic = (
         self.cfg.desired_feet_height
-        + torch.cat((mean_height_ray_front.unsqueeze(1).expand(-1, 2), mean_height_ray_back.unsqueeze(1).expand(-1, 2)), dim=1)
+        + feet_terrain_height
         - self._robot.data.body_pos_w[:, self._feet_ids_robot, 2]
     )
     feet_z_target_error_periodic = torch.where(
@@ -651,12 +622,12 @@ def two_legs_track_height_exp(self):
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
+    height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
     height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5)
 
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
+    height_map_resolution = self._pose_height_scanner.cfg.pattern_cfg.resolution
+    height_map_x_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
 
     cols_front = torch.arange(int(height_map_x_points / 2), height_data_scanner.shape[1], height_map_x_points).unsqueeze(
         1
