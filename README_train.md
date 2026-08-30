@@ -24,16 +24,16 @@ python -m pip install -e source/fault_locomotion_isaaclab
 - To train:
 
 ```bash
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 --headless
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 --headless
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 
 ```
 
 - To test the policy, you can press:
 ```bash
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Flat --num_envs=16
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Flat --num_envs=16 --visualizer newton
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16 --visualizer newton
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16 --visualizer newton
 ```
 
 ## Use Mixture-of-Experts or Morphological Symmetries

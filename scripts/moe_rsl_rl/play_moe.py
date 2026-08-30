@@ -177,8 +177,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
     try:
-        export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-        export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
+        runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
+        runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
     except Exception as e:  # export is optional for filming
         print(f"[WARN] policy export skipped: {e}")
 

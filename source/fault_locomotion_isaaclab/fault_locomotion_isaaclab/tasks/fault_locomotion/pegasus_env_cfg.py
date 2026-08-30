@@ -15,7 +15,13 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import GaussianNoiseCfg, NoiseModelWithAdditiveBiasCfg
 from isaaclab_tasks.utils import PresetCfg
 
-from isaaclab_newton.physics import KaminoPADMMSolverCfg, MJWarpSolverCfg, NewtonCfg
+from isaaclab_newton.physics import (
+    KaminoPADMMSolverCfg,
+    MJWarpSolverCfg,
+    NewtonCfg,
+    NewtonCollisionPipelineCfg,
+    NewtonShapeCfg,
+)
 from isaaclab_ov.physics import OvPhysxCfg
 from isaaclab_physx.physics import PhysxCfg
 from isaaclab.physics import PhysxAutoCfg
