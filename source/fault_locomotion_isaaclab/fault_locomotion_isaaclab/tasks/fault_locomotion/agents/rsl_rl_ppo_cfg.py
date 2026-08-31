@@ -71,7 +71,7 @@ class RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         #distribution_cfg=RslRlMLPModelCfg.BetaDistribution(action_range=[-3.0, 3.0])
     )
     critic = RslRlMLPModelCfg(
-        hidden_dims=[128, 128, 128],
+        hidden_dims=[512, 256, 128],
         activation="elu",
         obs_normalization=False,
     )
