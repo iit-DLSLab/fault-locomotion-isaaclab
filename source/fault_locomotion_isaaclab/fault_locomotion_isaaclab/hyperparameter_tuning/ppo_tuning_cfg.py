@@ -38,7 +38,7 @@ class PPOJobCfg:
 
             cfg["hydra_args"]["agent.policy.actor_hidden_dims"] = tune.choice(mlp_options)
             cfg["hydra_args"]["agent.policy.critic_hidden_dims"] = tune.choice(mlp_options)
-            cfg["hydra_args"]["agent.policy.activation"] = tune.choice(["relu", "tanh", "sigmoid", "elu"])
+            #cfg["hydra_args"]["agent.policy.activation"] = tune.choice(["relu", "tanh", "sigmoid", "elu"])
 
         if vary_network_type:
             cfg["hydra_args"]["agent.policy.class_name"] = tune.choice(["ActorCriticRecurrent", "ActorCritic"])
@@ -63,16 +63,16 @@ class PPOJobCfg:
 class FaultLocomotionGo2FlatPPOTuner(PPOJobCfg):
     def __init__(self):
         cfg = {"runner_args": {"--task": "FaultLocomotion-Go2-Flat"}}
-        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=True)
+        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=False)
 
 
 class FaultLocomotionGo2RoughBlindPPOTuner(PPOJobCfg):
     def __init__(self):
-        cfg = {"runner_args": {"--task": "aultLocomotion-Go2-Rough-Blind"}}
-        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=True)
+        cfg = {"runner_args": {"--task": "FaultLocomotion-Go2-Rough-Blind"}}
+        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=False)
 
 
 class FaultLocomotionGo2RoughVisionPPOTuner(PPOJobCfg):
     def __init__(self):
-        cfg = {"runner_args": {"--task": "aultLocomotion-Go2-Rough-Vision"}}
-        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=True)
+        cfg = {"runner_args": {"--task": "FaultLocomotion-Go2-Rough-Vision"}}
+        super().__init__(cfg, vary_mlp=True, vary_algorithm=True, vary_network_type=False)
