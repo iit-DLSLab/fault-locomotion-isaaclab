@@ -93,14 +93,27 @@ def randomize_joint_parameters(
         viscous_friction_coeff = viscous_friction_coeff[env_ids_for_slice, joint_ids]
 
 
-        # Single write call for all versions
-        asset.write_joint_friction_coefficient_to_sim(
-            joint_friction_coeff=static_friction_coeff,
-            joint_dynamic_friction_coeff=static_friction_coeff,
-            joint_viscous_friction_coeff=viscous_friction_coeff,
-            joint_ids=joint_ids,
-            env_ids=env_ids,
-        )
+        # Newton exposes a single dry-friction value, while PhysX backends also
+        # provide a separate dynamic-friction coefficient.
+        if hasattr(asset, "write_joint_dynamic_friction_coefficient_to_sim_index"):
+            asset.write_joint_friction_coefficient_to_sim_index(
+                joint_friction_coeff=static_friction_coeff,
+                joint_dynamic_friction_coeff=static_friction_coeff,
+                joint_viscous_friction_coeff=viscous_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
+        else:
+            asset.write_joint_friction_coefficient_to_sim_index(
+                joint_friction_coeff=static_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
+            asset.write_joint_viscous_friction_coefficient_to_sim_index(
+                joint_viscous_friction_coeff=viscous_friction_coeff,
+                joint_ids=joint_ids,
+                env_ids=env_ids,
+            )
 
     # joint armature
     if armature_distribution_params is not None:
@@ -112,27 +125,26 @@ def randomize_joint_parameters(
             operation=operation,
             distribution=distribution,
         )
-        asset.write_joint_armature_to_sim(
-            armature[env_ids_for_slice, joint_ids], joint_ids=joint_ids, env_ids=env_ids
+        asset.write_joint_armature_to_sim_index(
+            armature=armature[env_ids_for_slice, joint_ids], joint_ids=joint_ids, env_ids=env_ids
         )
 
 
-def _restore_default_actuator_gains(self, asset: Articulation, env_ids: torch.Tensor):
+def _restore_healthy_actuator_gains(self, asset: Articulation, env_ids: torch.Tensor):
     for joint_type in ("hip", "thigh", "calf"):
-        joint_ids = self._actuator_joint_ids[joint_type]
         actuator = asset.actuators[joint_type]
-        actuator.stiffness[env_ids] = asset.data.default_joint_stiffness[env_ids][:, joint_ids]
-        actuator.damping[env_ids] = asset.data.default_joint_damping[env_ids][:, joint_ids]
+        actuator.stiffness[env_ids] = self._healthy_actuator_stiffness[joint_type][env_ids]
+        actuator.damping[env_ids] = self._healthy_actuator_damping[joint_type][env_ids]
 
 
 def _failures_event_setter(self, env_ids, failure_type):
     # Restore any prior per-joint torque scaling state for THIS reset batch.
     self._per_leg_joint_status[env_ids, :, :] = 1.0
 
-    # Restore default joint gains for THIS reset batch before applying any failure.
+    # Restore the healthy (possibly randomized) Pace gains before applying a failure.
     asset_cfg = SceneEntityCfg("robot", joint_names=[".*"])
     asset: Articulation = self.scene[asset_cfg.name]
-    _restore_default_actuator_gains(self, asset, env_ids)
+    _restore_healthy_actuator_gains(self, asset, env_ids)
 
     FL_hip = self._actuator_leg_ids["hip"]["FL"]
     FR_hip = self._actuator_leg_ids["hip"]["FR"]
@@ -153,8 +165,6 @@ def _failures_event_setter(self, env_ids, failure_type):
     fine_mask = failure_type[env_ids] == 0
     if torch.any(fine_mask):
         normal_envs = env_ids[fine_mask]
-
-        _restore_default_actuator_gains(self, asset, normal_envs)
 
         # Reset mask for non-failed envs
         self._per_leg_joint_status[normal_envs, :, :] = 1.0
@@ -541,6 +551,56 @@ def _failures_event_setter(self, env_ids, failure_type):
         asset.actuators["thigh"].damping[rr_all_failed_envs, RR_thigh] = 0.0
         asset.actuators["calf"].stiffness[rr_all_failed_envs, RR_calf] = 0.0
         asset.actuators["calf"].damping[rr_all_failed_envs, RR_calf] = 0.0
+
+
+def randomize_pace_actuator_delay(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg,
+    min_delay: int = 0,
+    max_delay: int | None = None,
+):
+    """Randomize integer delay (in simulation steps) for Pace actuators.
+
+    The sampled delay is applied per-environment at reset through each actuator's
+    ``update_time_lags`` method.
+    """
+    if min_delay < 0:
+        raise ValueError(f"min_delay must be >= 0, got {min_delay}.")
+
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    # If max_delay is not specified in the event params, use the maximum default
+    # max_delay declared in the Pace actuator configs attached to this asset.
+    if max_delay is None:
+        inferred_max_delay = 0
+        for actuator in asset.actuators.values():
+            actuator_cfg = getattr(actuator, "cfg", None)
+            actuator_max_delay = getattr(actuator_cfg, "max_delay", None)
+            if actuator_max_delay is not None:
+                inferred_max_delay = max(inferred_max_delay, int(actuator_max_delay))
+        max_delay = inferred_max_delay
+
+    if max_delay < min_delay:
+        raise ValueError(f"max_delay must be >= min_delay, got [{min_delay}, {max_delay}].")
+
+    if env_ids is None:
+        env_ids = torch.arange(env.scene.num_envs, device=asset.device)
+
+    if len(env_ids) == 0:
+        return
+
+    delays = torch.randint(
+        low=min_delay,
+        high=max_delay + 1,
+        size=(len(env_ids),),
+        dtype=torch.int,
+        device=asset.device,
+    )
+
+    for actuator in asset.actuators.values():
+        if hasattr(actuator, "update_time_lags"):
+            actuator.update_time_lags(delays, env_ids)
 
 
 def _sample_random_commands(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:

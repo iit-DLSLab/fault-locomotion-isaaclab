@@ -1,4 +1,4 @@
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from pathlib import Path
 from dataclasses import MISSING
@@ -65,7 +65,15 @@ obs_space_names_critic += [
         "clock_data", "clock_data", "clock_data",  # P gains
         "clock_data", "clock_data", "clock_data",  # D gains
 ]
-obs_space_names_critic += ["invariant_scalar", "invariant_scalar", "clock_data", "clock_data", "clock_data"]
+obs_space_names_critic += [
+        "base_lin_vel",  # clean lin vel b
+        "invariant_scalar", "invariant_scalar",  # height error, terrain pitch
+        "clock_data",  # contacts foot
+        "clock_data",  # feet air time
+        "clock_data",  # feet contact time
+        "clock_data",  # foot error
+]
+obs_space_names_critic += ["heightmap:4x4"]
 
 
 # Action Space

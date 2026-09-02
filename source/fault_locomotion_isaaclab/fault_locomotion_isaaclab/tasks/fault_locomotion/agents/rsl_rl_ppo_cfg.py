@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 
-from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab.utils.configclass import configclass
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
 
 from pathlib import Path
 from dataclasses import MISSING
@@ -21,16 +21,19 @@ class FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 2500
     save_interval = 50
     experiment_name = "flat_direct"
-    empirical_normalization = False
-    policy = RslRlPpoActorCriticCfg(
-        class_name="ActorCritic", #ActorCritic, ActorCriticRecurrent, ActorCriticMoE
-        init_noise_std=1.0,
-        actor_hidden_dims=[128, 128, 128],
-        critic_hidden_dims=[128, 128, 128],
+    obs_groups = {"actor": ["policy"], "critic": ["critic"]}  # rsl_rl 5.4 port
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[128, 128, 128],
         activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[128, 128, 128],
+        activation="elu",
+        obs_normalization=False,
     )
     algorithm = RslRlPpoAlgorithmCfg(
-        class_name="PPO", #PPO
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
@@ -59,16 +62,20 @@ class RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 20000
     save_interval = 50
     experiment_name = "rough_direct"
-    empirical_normalization = False
-    policy = RslRlPpoActorCriticCfg(
-        class_name="ActorCritic", #ActorCritic, ActorCriticRecurrent, ActorCriticMoE
-        init_noise_std=1.0,
-        actor_hidden_dims=[128, 128, 128],
-        critic_hidden_dims=[128, 128, 128],
+    obs_groups = {"actor": ["policy"], "critic": ["critic"]}  # rsl_rl 5.4 port
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[128, 128, 128],
         activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+        #distribution_cfg=RslRlMLPModelCfg.BetaDistribution(action_range=[-3.0, 3.0])
+    )
+    critic = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
+        activation="elu",
+        obs_normalization=False,
     )
     algorithm = RslRlPpoAlgorithmCfg(
-        class_name="PPO", #PPO
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,

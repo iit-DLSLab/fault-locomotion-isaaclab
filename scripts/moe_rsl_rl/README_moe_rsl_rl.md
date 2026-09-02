@@ -12,15 +12,15 @@ These script integrate with moe-rsl-rl to train a policy with Mixture-of-Experts
 - Train with
 
 ```bash
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 --headless
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 --headless
-python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
+python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=4096
+python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 
+python scripts/moe_rsl_rl/train_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096
 ```
 
 - Play with
 
 ```bash
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 --headless
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 --headless
-python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
+python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Flat --num_envs=40 --visualizer newton
+python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=40 --visualizer newton
+python scripts/moe_rsl_rl/play_moe.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=40 --visualizer newton
 ```

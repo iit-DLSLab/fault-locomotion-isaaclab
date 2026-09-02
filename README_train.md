@@ -24,16 +24,16 @@ python -m pip install -e source/fault_locomotion_isaaclab
 - To train:
 
 ```bash
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 --headless
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 --headless
-python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 --headless
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Flat --num_envs=4096 
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=4096 
+python scripts/rsl_rl/train.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=4096 
 ```
 
 - To test the policy, you can press:
 ```bash
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Flat --num_envs=16
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16
-python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Flat --num_envs=16 --visualizer newton
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Blind --num_envs=16 --visualizer newton
+python scripts/rsl_rl/play.py --task=FaultLocomotion-Go2-Rough-Vision --num_envs=16 --visualizer newton
 ```
 
 ## Use Mixture-of-Experts or Morphological Symmetries
@@ -42,9 +42,10 @@ Each of these modules has a specific README in its own script folder.
 ## Run Hyperparameter Search
 
 ```bash
-echo "import ray; ray.init(); import time; [time.sleep(10) for _ in iter(int, 1)]" | python3 (TERMINAL 1)
-```
-
-```bash
-python3 ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/tuner.py --run_mode local --cfg_file ../fault_locomotion_isaaclab/exts/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/locomotion_aliengo_cfg.py --cfg_class LocomotionAliengoFlatTuner (TERMINAL 2)
+    python source/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/ppo_tuner.py \
+        --run_mode local \
+        --cfg_file source/fault_locomotion_isaaclab/fault_locomotion_isaaclab/hyperparameter_tuning/ppo_tuning_cfg.py \
+        --cfg_class FaultLocomotionGo2FlatPPOTuner \
+        --metric Train/mean_reward
+        --num_samples 40
 ```

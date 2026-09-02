@@ -1,12 +1,14 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Script to play a checkpoint if an RL agent from RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
 
 import argparse
 import sys
-
-# Import here to avoid the pinocchio error if morphosymm import it after the import of AppLauncher.
-import pinocchio as pin
 
 from isaaclab.app import AppLauncher
 
@@ -75,11 +77,11 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
+# PLACEHOLDER: Extension template (do not remove this comment)
 #from rsl_rl.runners import on_policy_runner
 from moe_rsl_rl.runners.moe_on_policy_runner import MoEOnPolicyRunner
 # Import extensions to set up environment tasks
 import fault_locomotion_isaaclab.tasks  # noqa: F401
-
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
@@ -90,6 +92,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # override configurations with non-hydra CLI arguments
     agent_cfg: RslRlBaseRunnerCfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
+    # Isaac Lab 3.0 / rsl-rl 5.x port: migrate deprecated cfg fields
+    from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg
+    import importlib.metadata as _md
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg, _md.version("rsl-rl-lib"))
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
 
     # set the environment seed
@@ -141,6 +147,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
     runner = MoEOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    
     runner.load(resume_path)
 
     # obtain the trained policy for inference
@@ -152,8 +159,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # version 2.3 onwards
         policy_nn = runner.alg.policy
     except AttributeError:
-        # version 2.2 and below
-        policy_nn = runner.alg.actor_critic
+        try:
+            # version 2.2 and below
+            policy_nn = runner.alg.actor_critic
+        except AttributeError:
+            # rsl-rl >= 5.0: actor model
+            policy_nn = runner.alg.actor
 
     # extract the normalizer
     if hasattr(policy_nn, "actor_obs_normalizer"):
@@ -165,9 +176,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
-
+    try:
+        runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
+        runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
+    except Exception as e:  # export is optional for filming
+        print(f"[WARN] policy export skipped: {e}")
 
     dt = env.unwrapped.step_dt
 
@@ -184,7 +197,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # env stepping
             obs, _, dones, _ = env.step(actions)
             # reset recurrent states for episodes that have terminated
-            policy_nn.reset(dones)
+            if hasattr(policy_nn, "reset"):
+                policy_nn.reset(dones)
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video

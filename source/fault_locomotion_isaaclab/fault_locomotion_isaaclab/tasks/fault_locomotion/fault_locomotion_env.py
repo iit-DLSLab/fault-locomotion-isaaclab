@@ -21,7 +21,9 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns, Imu
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
+
+from isaaclab import cloner
 
 try:
     from .. import custom_rewards, custom_events, custom_observations
@@ -29,7 +31,6 @@ except Exception:
     from fault_locomotion_isaaclab.tasks import custom_rewards, custom_events, custom_observations
 
 
-from .aliengo_env_cfg import AliengoFlatEnvCfg, AliengoRoughBlindEnvCfg, AliengoRoughVisionEnvCfg
 from .go2_env_cfg import Go2FlatEnvCfg, Go2RoughVisionEnvCfg, Go2RoughBlindEnvCfg
 from .pegasus_env_cfg import PegasusFlatEnvCfg, PegasusRoughVisionEnvCfg, PegasusRoughBlindEnvCfg
 
@@ -63,7 +64,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             dtype=torch.long,
             device=self.device,
         )
-        self._body_masses = self._robot.root_physx_view.get_masses().clone().to(self.device)
+        self._body_masses = self._robot.data.body_mass.torch.clone()
         
         # Periodic gait
         self._step_freq = torch.tensor(self.cfg.desired_step_freq, device=self.device)
@@ -182,6 +183,10 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         self._actuator_joint_ids = {}
         self._actuator_leg_ids = {}
+        self._nominal_actuator_stiffness = {}
+        self._nominal_actuator_damping = {}
+        self._healthy_actuator_stiffness = {}
+        self._healthy_actuator_damping = {}
         for joint_type in ("hip", "thigh", "calf"):
             actuator = self._robot.actuators[joint_type]
             if isinstance(actuator.joint_indices, slice):
@@ -192,6 +197,10 @@ class FaultLocomotionEnv(DirectRLEnv):
             self._actuator_leg_ids[joint_type] = {
                 leg: actuator.joint_names.index(f"{leg}_{joint_type}_joint") for leg in ("FL", "FR", "RL", "RR")
             }
+            self._nominal_actuator_stiffness[joint_type] = actuator.stiffness.clone()
+            self._nominal_actuator_damping[joint_type] = actuator.damping.clone()
+            self._healthy_actuator_stiffness[joint_type] = actuator.stiffness.clone()
+            self._healthy_actuator_damping[joint_type] = actuator.damping.clone()
 
 
     def _setup_scene(self):
@@ -200,14 +209,27 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._contact_sensor = ContactSensor(self.cfg.contact_sensor)
         self.scene.sensors["contact_sensor"] = self._contact_sensor
 
-        # we add a first height scanner for rewards like orientation and feet height
-        self._height_scanner = RayCaster(self.cfg.height_scanner)
-        self.scene.sensors["height_scanner"] = self._height_scanner
+        # Keep the base-centered scanner for base-height and terrain-orientation terms.
+        self._pose_height_scanner = RayCaster(self.cfg.pose_height_scanner)
+        self.scene.sensors["pose_height_scanner"] = self._pose_height_scanner
+
+        # Use one small height map centered on each foot for the clearance rewards.
+        self._foot_height_scanners = []
+        for foot_name in ("FL_foot", "FR_foot", "RL_foot", "RR_foot"):
+            scanner_cfg = self.cfg.foot_height_scanner.replace(
+                prim_path=f"/World/envs/env_.*/Robot/{foot_name}",
+                visualizer_cfg=self.cfg.foot_height_scanner.visualizer_cfg.replace(
+                    prim_path=f"/Visuals/{foot_name}HeightScanner"
+                ),
+            )
+            scanner = RayCaster(scanner_cfg)
+            self.scene.sensors[f"{foot_name.lower()}_height_scanner"] = scanner
+            self._foot_height_scanners.append(scanner)
 
         # we add a second height scanner for the vision-based locomotion
         if(getattr(self.cfg, "use_vision", False)):
-            self._height_scanner2 = RayCaster(self.cfg.height_scanner2)
-            self.scene.sensors["height_scanner2"] = self._height_scanner2
+            self._perceptive_height_scanner = RayCaster(self.cfg.perceptive_height_scanner)
+            self.scene.sensors["perceptive_height_scanner"] = self._perceptive_height_scanner
 
         # we add an imu
         self._imu = Imu(self.cfg.imu)
@@ -217,9 +239,20 @@ class FaultLocomotionEnv(DirectRLEnv):
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
         
-        # clone, filter, and replicate
-        self.scene.clone_environments(copy_from_source=False)
-        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        # clone and replicate environments
+        src, dest = "/World/envs/env_0", "/World/envs/env_{}"
+        positions = cloner.grid_transforms(
+            self.scene.num_envs, self.scene.cfg.env_spacing, device=self.device
+        )[0]
+        global_paths = (self.cfg.terrain.prim_path,)
+        plan = cloner.clone_plan_from_env_0(
+            src, dest, self.scene.num_envs, self.device, positions, global_paths=global_paths
+        )
+        cloner.replicate(plan, stage=self.scene.stage)
+
+        # PhysX replication requires explicit collision filtering between environments.
+        if "physx" in self.scene.physics_backend:
+            self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
@@ -333,12 +366,12 @@ class FaultLocomotionEnv(DirectRLEnv):
             # If Concurrent SE/Learned State Estimator, we predict linear and angular vel from IMU
             velocity_b = custom_observations._get_concurrent_state_estimation(self)
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._imu.data.projected_gravity_b
+            projected_gravity_b = self._robot.data.projected_gravity_b
         elif(self.cfg.use_imu):
             # Using directly the IMU
             velocity_b = self._imu.data.lin_acc_b
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._imu.data.projected_gravity_b
+            projected_gravity_b = self._robot.data.projected_gravity_b
         else:
             #Using a model-based state estimation
             velocity_b = self._robot.data.root_lin_vel_b
@@ -396,7 +429,7 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Add heightmap data to obs if needed
         if(getattr(self.cfg, "use_vision", False)):
             height_data = (
-                self._height_scanner2.data.pos_w[:, 2].unsqueeze(1) - self._height_scanner2.data.ray_hits_w[..., 2] - 0.5
+                self._perceptive_height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._perceptive_height_scanner.data.ray_hits_w[..., 2] - 0.5
             )
             height_data = torch.nan_to_num(height_data, nan=0.0, posinf=1.0, neginf=-1.0)
             height_data = height_data.clip(-1.0, 1.0)
@@ -537,8 +570,16 @@ class FaultLocomotionEnv(DirectRLEnv):
 
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
+        # Isaac Lab 3.0 compat: ids may arrive (or _ALL_INDICES may be) warp arrays
+        def _to_torch_ids(ids):
+            if ids is not None and not torch.is_tensor(ids):
+                import warp as wp
+                ids = wp.to_torch(ids)
+            return ids.to(dtype=torch.long) if ids is not None else ids
+
+        env_ids = _to_torch_ids(env_ids)
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self._robot._ALL_INDICES
+            env_ids = _to_torch_ids(self._robot._ALL_INDICES)
             
             # Assignment of the failure case. We may want to assign them completely random,
             # or reserving some fixed number to some cases
@@ -579,6 +620,16 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
+
+        # The reset events may randomize the explicit Pace actuator gains. Keep
+        # those healthy values so failure injection can temporarily zero and
+        # later restore individual joints without reading the solver PD gains,
+        # which are intentionally zero for explicit actuators.
+        for joint_type in ("hip", "thigh", "calf"):
+            actuator = self._robot.actuators[joint_type]
+            self._healthy_actuator_stiffness[joint_type][env_ids] = actuator.stiffness[env_ids]
+            self._healthy_actuator_damping[joint_type][env_ids] = actuator.damping[env_ids]
+
         if len(env_ids) == self.num_envs: 
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf[:] = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))

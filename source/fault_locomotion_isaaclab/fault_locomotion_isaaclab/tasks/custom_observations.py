@@ -5,6 +5,8 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
+from . import custom_rewards
+
 
 def _get_concurrent_state_estimation(self):
     # Using a supervised learning state estimation
@@ -14,7 +16,7 @@ def _get_concurrent_state_estimation(self):
             for tensor in (
                 self._imu.data.lin_acc_b,
                 self._imu.data.ang_vel_b,
-                self._imu.data.projected_gravity_b,
+                self._robot.data.projected_gravity_b,
                 self._commands,
                 self._robot.data.joint_pos[:, self._ids_joints_order] - self._robot.data.default_joint_pos[:, self._ids_joints_order],
                 self._robot.data.joint_vel[:, self._ids_joints_order],
@@ -116,34 +118,50 @@ def _get_rma(self):
     return obs_rma
 
 
+def _normalize_actuator_gain(gain: torch.Tensor, nominal_gain: torch.Tensor) -> torch.Tensor:
+    """Normalize an explicit actuator gain without dividing by a zero nominal gain."""
+    valid = nominal_gain.abs() > torch.finfo(nominal_gain.dtype).eps
+    denominator = torch.where(valid, nominal_gain, torch.ones_like(nominal_gain))
+    return torch.where(valid, gain / denominator, torch.zeros_like(gain))
+
+
 def _get_privileged_observation(self):
 
     asset_cfg = SceneEntityCfg("robot", joint_names=[".*"])
     asset: Articulation = self.scene[asset_cfg.name]
 
     # PD of the joints
-    hip_stiffness = asset.actuators["hip"].stiffness
-    thigh_stiffness = asset.actuators["thigh"].stiffness
-    calf_stiffness = asset.actuators["calf"].stiffness
+    hip_stiffness = _normalize_actuator_gain(
+        asset.actuators["hip"].stiffness, self._nominal_actuator_stiffness["hip"]
+    )
+    thigh_stiffness = _normalize_actuator_gain(
+        asset.actuators["thigh"].stiffness, self._nominal_actuator_stiffness["thigh"]
+    )
+    calf_stiffness = _normalize_actuator_gain(
+        asset.actuators["calf"].stiffness, self._nominal_actuator_stiffness["calf"]
+    )
 
-    hip_damping = asset.actuators["hip"].damping
-    thigh_damping = asset.actuators["thigh"].damping
-    calf_damping = asset.actuators["calf"].damping
-
-    default_stiffness = asset.data.default_joint_stiffness[0][0]
-    default_damping = asset.data.default_joint_damping[0][0]
+    hip_damping = _normalize_actuator_gain(
+        asset.actuators["hip"].damping, self._nominal_actuator_damping["hip"]
+    )
+    thigh_damping = _normalize_actuator_gain(
+        asset.actuators["thigh"].damping, self._nominal_actuator_damping["thigh"]
+    )
+    calf_damping = _normalize_actuator_gain(
+        asset.actuators["calf"].damping, self._nominal_actuator_damping["calf"]
+    )
 
     # height error
-    height_data_scanner = self._height_scanner.data.ray_hits_w[..., 2]
+    height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
     height_data_scanner = torch.clip(height_data_scanner, min=-5, max=5) # Handle inf values
     mean_height_ray = torch.mean(height_data_scanner, dim=1)
     height_error = torch.abs(self.cfg.desired_base_height + mean_height_ray - self._robot.data.root_state_w[:, 2])
 
     # terrain orientation
-    height_map_resolution = self._height_scanner.cfg.pattern_cfg.resolution
-    height_map_x_points = int(round(self._height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
-    height_map_y_points = int(round(self._height_scanner.cfg.pattern_cfg.size[1] / height_map_resolution))
+    height_map_resolution = self._pose_height_scanner.cfg.pattern_cfg.resolution
+    height_map_x_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[0] / height_map_resolution)) + 1
+    height_map_y_points = int(round(self._pose_height_scanner.cfg.pattern_cfg.size[1] / height_map_resolution))
     distance_between_front_and_back = (height_map_x_points/2)* height_map_resolution
 
     cols_back = torch.arange(0, height_data_scanner.shape[1], height_map_x_points).unsqueeze(1) + torch.arange(int(height_map_x_points/2))
@@ -174,14 +192,32 @@ def _get_privileged_observation(self):
     current_contact_time = self._contact_sensor.data.current_contact_time[:, self._feet_contact_sensor_ids]
     current_contact_time = torch.clip(current_contact_time, max=1.0)*legs_status
 
+    # Foot height tracking error (per foot, relative to local terrain height; zeroed for failed legs)
+    feet_terrain_height = custom_rewards._get_feet_terrain_heights(self)
+    foot_error = torch.abs(
+        self.cfg.desired_feet_height + feet_terrain_height - self._robot.data.body_pos_w[:, self._feet_ids_robot, 2]
+    ) * legs_status
+
+    # Pose height scanner data
+    height_data = (
+        self._pose_height_scanner.data.pos_w[:, 2].unsqueeze(1)
+        - self._pose_height_scanner.data.ray_hits_w[..., 2]
+        - 0.5
+    )
+    height_data = torch.nan_to_num(height_data, nan=0.0, posinf=1.0, neginf=-1.0)
+    height_data = height_data.clip(-1.0, 1.0)
+
     obs_privileged = torch.cat((
-                        hip_stiffness/default_stiffness, thigh_stiffness/default_stiffness, calf_stiffness/default_stiffness, #P gain
-                        hip_damping/default_damping, thigh_damping/default_damping, calf_damping/default_damping, #D gain
+                        hip_stiffness, thigh_stiffness, calf_stiffness, #P gain
+                        hip_damping, thigh_damping, calf_damping, #D gain
+                        self._robot.data.root_lin_vel_b,
                         height_error.unsqueeze(1),
                         terrain_pitch.unsqueeze(1),
                         contacts_foot,
                         current_air_time,
                         current_contact_time,
+                        foot_error,
+                        height_data,
                         )
                     , dim=-1)
     return obs_privileged

@@ -1,4 +1,4 @@
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from pathlib import Path
 from dataclasses import MISSING
@@ -43,14 +43,14 @@ class MoECfg:
 # Mixture of Expert Stuff
 moe_cfg = MoECfg(
     who = "actor+critic",
-    num_experts = 1,
+    num_experts = 4,
     gate_hidden_dims = [128],
     top_k = None,
     use_gate_loss = False,
     use_load_balance_loss = False,
     use_explicit_expert = True,  
     use_shared_layers = None, 
-    expert_output_dims = [12]
+    expert_output_dims = [12, 12, 12, 12]
 )
 
 """moe_cfg = MoECfg(
