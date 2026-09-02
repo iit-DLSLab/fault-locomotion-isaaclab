@@ -1,7 +1,7 @@
 <div style="text-align: left;">
   <img src="https://img.shields.io/badge/IsaacLab%20-v3.0.0-green" alt="IsaacLab v3.0.0" style="margin-bottom: 1px;">
   <img src="https://img.shields.io/badge/rsl_rl%20-v5.4.2-brown" alt="rsl-rl v5.4.2" style="margin-bottom: 1px;">
-  <img src="https://img.shields.io/badge/Mujoco%20-v3.10.0-blue" alt="Mujoco v3.7.0" style="margin-bottom: 1px;">
+  <img src="https://img.shields.io/badge/Mujoco%20-v3.7.0-blue" alt="Mujoco v3.10.0" style="margin-bottom: 1px;">
   <div style="display: flex; justify-content: space-around;">
     <img src="./gifs/four_legs.gif" alt="4legs" width="32%">
     <img src="./gifs/two_legs.gif" alt="2legs" width="32%">
