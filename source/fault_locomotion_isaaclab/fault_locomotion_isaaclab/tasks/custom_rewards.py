@@ -144,7 +144,7 @@ def undesired_contacts(self):
         0
     ] > 1.0
 
-    legs_mask_for_undersider_contacts = torch.cat([legs_status, legs_status], dim=1)
+    legs_mask_for_undersider_contacts = torch.cat([legs_status, legs_status, legs_status], dim=1)
     trunk_mask = num_legs_down < 2
 
     is_contact[:, 0] = is_contact[:, 0] & trunk_mask
@@ -385,7 +385,7 @@ def feet_height_clearance_aperiodic(self):
         - self._swing_peak
     )
     feet_z_target_error_aperiodic = torch.where(
-        feet_z_target_error_aperiodic < 0.03, feet_z_target_error_aperiodic * 0.2, feet_z_target_error_aperiodic
+        feet_z_target_error_aperiodic < 0.00, feet_z_target_error_aperiodic * 0.2, feet_z_target_error_aperiodic
     )
     feet_z_target_error_aperiodic = torch.abs(feet_z_target_error_aperiodic)
     feet_z_target_error_aperiodic = torch.clamp(feet_z_target_error_aperiodic, min=0.0, max=self.cfg.desired_feet_height)
@@ -426,7 +426,7 @@ def feet_height_clearance_periodic(self):
         - self._robot.data.body_pos_w[:, self._feet_ids_robot, 2]
     )
     feet_z_target_error_periodic = torch.where(
-        feet_z_target_error_periodic < 0.03, feet_z_target_error_periodic * 0.2, feet_z_target_error_periodic
+        feet_z_target_error_periodic < 0.0, feet_z_target_error_periodic * 0.2, feet_z_target_error_periodic
     )
     feet_z_target_error_periodic = torch.abs(feet_z_target_error_periodic)
     feet_z_target_error_periodic = torch.clamp(feet_z_target_error_periodic, min=0.0, max=self.cfg.desired_feet_height)

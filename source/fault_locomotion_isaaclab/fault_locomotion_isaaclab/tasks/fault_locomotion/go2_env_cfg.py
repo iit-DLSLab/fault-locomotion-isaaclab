@@ -8,6 +8,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, MultiMeshRayCasterCameraCfg, TiledCameraCfg, patterns
 from isaaclab.sim import SimulationCfg
+from isaaclab_visualizers.newton import NewtonGLVisualizerCfg
 
 from isaaclab.envs import ViewerCfg
 from isaaclab.terrains import TerrainImporterCfg
@@ -296,6 +297,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         physics=PhysicsCfg(),
+        #default_visualizer_cfg=NewtonGLVisualizerCfg(max_visible_envs=128)
     )
 
     terrain = TerrainImporterCfg(

@@ -49,7 +49,7 @@ moe_cfg = MoECfg(
     use_gate_loss = False,
     use_load_balance_loss = False,
     use_explicit_expert = True,  
-    use_shared_layers = None, 
+    use_shared_layers = "backbone", 
     expert_output_dims = [12, 12, 12, 12]
 )
 
