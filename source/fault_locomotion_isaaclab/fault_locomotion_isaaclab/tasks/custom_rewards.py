@@ -385,7 +385,7 @@ def feet_height_clearance_aperiodic(self):
         - self._swing_peak
     )
     feet_z_target_error_aperiodic = torch.where(
-        feet_z_target_error_aperiodic < 0.00, feet_z_target_error_aperiodic * 0.2, feet_z_target_error_aperiodic
+        feet_z_target_error_aperiodic < 0.0, feet_z_target_error_aperiodic * 0.5, feet_z_target_error_aperiodic
     )
     feet_z_target_error_aperiodic = torch.abs(feet_z_target_error_aperiodic)
     feet_z_target_error_aperiodic = torch.clamp(feet_z_target_error_aperiodic, min=0.0, max=self.cfg.desired_feet_height)
@@ -426,7 +426,7 @@ def feet_height_clearance_periodic(self):
         - self._robot.data.body_pos_w[:, self._feet_ids_robot, 2]
     )
     feet_z_target_error_periodic = torch.where(
-        feet_z_target_error_periodic < 0.0, feet_z_target_error_periodic * 0.2, feet_z_target_error_periodic
+        feet_z_target_error_periodic < 0.0, feet_z_target_error_periodic * 0.5, feet_z_target_error_periodic
     )
     feet_z_target_error_periodic = torch.abs(feet_z_target_error_periodic)
     feet_z_target_error_periodic = torch.clamp(feet_z_target_error_periodic, min=0.0, max=self.cfg.desired_feet_height)

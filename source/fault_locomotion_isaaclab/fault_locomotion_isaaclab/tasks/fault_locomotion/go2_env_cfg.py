@@ -191,7 +191,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
 
     use_imu = False
     
-    use_concurrent_state_est = True
+    use_concurrent_state_est = False
     if(use_concurrent_state_est):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
@@ -441,7 +441,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     
 
     # Feet reward scale
-    feet_air_time_reward_scale = 1.5
+    feet_air_time_reward_scale = 0.5
     feet_air_time_variance_reward_scale = -1.0
 
     feet_height_clearance_aperiodic_reward_scale = 0.5
