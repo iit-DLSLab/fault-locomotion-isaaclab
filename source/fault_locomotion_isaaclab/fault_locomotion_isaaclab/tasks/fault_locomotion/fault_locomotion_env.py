@@ -170,7 +170,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._feet_contact_sensor_ids, _ = self._contact_sensor.find_bodies(["FL_foot", "FR_foot", "RL_foot", "RR_foot"], preserve_order=True)
         self._hip_contact_sensor_ids, _ = self._contact_sensor.find_bodies(["FL_hip", "FR_hip", "RL_hip", "RR_hip"], preserve_order=True)
         self._thigh_contact_sensor_ids, _ = self._contact_sensor.find_bodies(["FL_thigh", "FR_thigh", "RL_thigh", "RR_thigh"], preserve_order=True)
-        self._undesired_contact_body_ids = self._base_contact_sensor_id + self._hip_contact_sensor_ids + self._thigh_contact_sensor_ids
+        self._calf_contact_sensor_ids, _ = self._contact_sensor.find_bodies(["FL_calf", "FR_calf", "RL_calf", "RR_calf"], preserve_order=True)
+        self._undesired_contact_body_ids = self._base_contact_sensor_id + self._hip_contact_sensor_ids + self._thigh_contact_sensor_ids + self._calf_contact_sensor_ids
 
         #two legs specific undesired contact body ids(front hip thigh)
         self._two_legs_undesired_contact_body_ids = self._hip_contact_sensor_ids[:2]
