@@ -36,12 +36,15 @@ class MoECfg:
     use_shared_layers = False
     """Whether to use a shared backbone between experts. False, "backbone", "backbone+head" are supported."""
 
+    use_pcgrad = False
+    """Project conflicting expert gradients on shared backbones (requires explicit routing)."""
+
     expert_output_dims = None
     """The output dimensions of each expert, which will be concatenated to form the final output"""
 
 
 # Mixture of Expert Stuff
-moe_cfg = MoECfg(
+"""moe_cfg = MoECfg(
     who = "actor+critic",
     num_experts = 4,
     gate_hidden_dims = [128],
@@ -51,9 +54,9 @@ moe_cfg = MoECfg(
     use_explicit_expert = True,  
     use_shared_layers = None, 
     expert_output_dims = [12, 12, 12, 12]
-)
+)"""
 
-"""moe_cfg = MoECfg(
+moe_cfg = MoECfg(
     who = "actor+critic",
     num_experts = 4,
     gate_hidden_dims = [128],
@@ -62,5 +65,6 @@ moe_cfg = MoECfg(
     use_load_balance_loss = False,
     use_explicit_expert = True,  
     use_shared_layers = "backbone", 
-    expert_output_dims = [12, 9, 9, 6]
-)"""
+    expert_output_dims = [12, 9, 9, 6],
+    use_pcgrad = True
+)

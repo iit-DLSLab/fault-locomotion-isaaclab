@@ -185,12 +185,12 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     else:
         history_length = 1
 
-    use_varying_action_space = False # if used MoE with varying expert_output_dims, check moe_cfg.py
+    use_varying_action_space = True # if used MoE with varying expert_output_dims, check moe_cfg.py
     observation_space += 1 # expert activation
 
     use_imu = False
     
-    use_concurrent_state_est = True
+    use_concurrent_state_est = False
     if(use_concurrent_state_est):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
