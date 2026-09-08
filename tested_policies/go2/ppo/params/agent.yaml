@@ -1,0 +1,227 @@
+seed: 42
+device: cuda:0
+num_steps_per_env: 24
+init_at_random_ep_len: true
+max_iterations: 20000
+empirical_normalization: {}
+obs_groups:
+  actor:
+  - policy
+  critic:
+  - critic
+clip_actions: null
+check_for_nan: true
+save_interval: 50
+experiment_name: rough_direct
+run_name: ''
+logger: wandb
+neptune_project: fault-locomotion
+wandb_project: fault-locomotion
+resume: false
+load_run: .*
+load_checkpoint: model_.*.pt
+class_name: OnPolicyRunner
+actor:
+  class_name: MLPModel
+  hidden_dims:
+  - 128
+  - 128
+  - 128
+  activation: elu
+  obs_normalization: false
+  distribution_cfg:
+    class_name: GaussianDistribution
+    init_std: 1.0
+    std_type: scalar
+critic:
+  class_name: MLPModel
+  hidden_dims:
+  - 128
+  - 128
+  - 128
+  activation: elu
+  obs_normalization: false
+  distribution_cfg: null
+algorithm:
+  class_name: PPO
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.001
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  entropy_coef: 0.005
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  optimizer: adam
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  normalize_advantage_per_mini_batch: false
+  share_cnn_encoders: false
+  rnd_cfg: null
+  symmetry_cfg: null
+policy: {}
+moe_cfg:
+  class_name: MixtureOfExpert
+  who: actor+critic
+  num_experts: 4
+  gate_hidden_dims:
+  - 128
+  top_k: null
+  use_gate_loss: false
+  use_load_balance_loss: false
+  use_explicit_expert: true
+  use_shared_layers: backbone
+  expert_output_dims:
+  - 12
+  - 12
+  - 12
+  - 12
+morphologycal_symmetries_cfg:
+  class_name: MorphologycalSymmetries
+  obs_space_names_actor:
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - invariant_scalar
+  obs_space_names_critic:
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - base_ang_vel
+  - gravity
+  - des_base_lin_vel_xy
+  - des_base_ang_vel_yaw
+  - joints_pos
+  - joints_vel
+  - joints_pos
+  - clock_data
+  - clock_data
+  - clock_data
+  - invariant_scalar
+  - clock_data
+  - clock_data
+  - clock_data
+  - clock_data
+  - clock_data
+  - clock_data
+  - base_lin_vel
+  - invariant_scalar
+  - invariant_scalar
+  - clock_data
+  - clock_data
+  - clock_data
+  - clock_data
+  - heightmap:4x4
+  action_space_names:
+  - joints_pos
+  joints_order:
+  - FL_hip_joint
+  - FR_hip_joint
+  - RL_hip_joint
+  - RR_hip_joint
+  - FL_thigh_joint
+  - FR_thigh_joint
+  - RL_thigh_joint
+  - RR_thigh_joint
+  - FL_calf_joint
+  - FR_calf_joint
+  - RL_calf_joint
+  - RR_calf_joint
+  robot_name: a1
+  schedule_fixed_to_adaptive_switch: null

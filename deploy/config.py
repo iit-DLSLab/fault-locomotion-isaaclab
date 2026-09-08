@@ -34,7 +34,7 @@ else:
     raise ValueError(f"Robot {robot} not supported")
 
 # ----------------------------------------------------------------------------------------------------------------
-policy_folder_path = dir_path + "/../tested_policies/" + robot + "/2026-07-02_15-13-34"
+policy_folder_path = dir_path + "/../tested_policies/" + robot + "/ppo"
 concurrent_state_est_network = policy_folder_path + "/exported/concurrent_state_estimator.pth"
 rma_network = policy_folder_path + "/exported/rma.pth"
 
