@@ -7,11 +7,11 @@
 ```bash
 # for conda using ROS2 humble
 conda env create -f deploy/installation/mamba_environment_humble.yaml
-conda activate basic_locomotion_isaaclab_env
+conda activate fault_locomotion_isaaclab_env
 
 # for conda using ROS2 lyrical
 conda env create -f deploy/installation/mamba_environment_lyrical.yaml
-conda activate basic_locomotion_isaaclab_env
+conda activate fault_locomotion_isaaclab_env
 
 # for pixi using ROS2 humble
 pixi shell --manifest-path deploy/installation/pixi.toml -e humble
