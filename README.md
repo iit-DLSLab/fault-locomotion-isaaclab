@@ -31,7 +31,7 @@ A list of robots and environments available are described below:
 
 | Robot Model         | Environment Name Pattern                                   |
 |---------------------|------------------------------------------------------------|
-| [Go2](https://github.com/iit-DLSLab/gym-quadruped/tree/master/gym_quadruped/robot_model/go2), Pegasus | FaultLocomotion-**RobotModel**-Flat-Blind <br> FaultLocomotion-**RobotModel**-Rough-Blind <br> FaultLocomotion-**RobotModel**-Rough-Vision |
+| [Go2](./robot_model/go2/), [Pegasus](./robot_model/pegasus/) | FaultLocomotion-**RobotModel**-Flat-Blind <br> FaultLocomotion-**RobotModel**-Rough-Blind <br> FaultLocomotion-**RobotModel**-Rough-Vision |
 
 
 

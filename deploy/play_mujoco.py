@@ -1,242 +1,229 @@
 # Description: This script is used to simulate the full model of the robot in mujoco
 
-# Authors:
-# Giulio Turrisi
-
+# Python imports
+import os
+import sys
 import time
 import numpy as np
-from tqdm import tqdm
-import sys
-import os 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(dir_path+"/../")
-sys.path.append(dir_path+"/../scripts/rsl_rl")
+np.set_printoptions(precision=3, suppress=True)
+import threading
+import copy
 
-# Gym and Simulation related imports
-from gym_quadruped.quadruped_env import QuadrupedEnv
-from gym_quadruped.utils.quadruped_utils import LegsAttr
-
-from gym_quadruped.sensors.heightmap import HeightMap
-from gym_quadruped.utils.mujoco.visual import render_sphere
+# Simulation related imports
+import mujoco
+import mujoco.viewer
+file_path = os.path.dirname(os.path.realpath(__file__))
+sys.path.append(file_path + "/mujoco_utils/")
+sys.path.append(file_path + "/../")
+import mujoco_utils
+from heightmap import HeightMap
 
 # Locomotion Policy imports
+from deploy import config
 from locomotion_policy_wrapper import LocomotionPolicyWrapper
 
-import config
 
+class PlayMujoco:
+    def __init__(self):
+        self.simulation_dt = 0.002
 
-if __name__ == '__main__':
-    np.set_printoptions(precision=3, suppress=True)
+        self.mjModel = mujoco.MjModel.from_xml_path(file_path + "/../robot_model/" + config.robot + "/" + config.scene + ".xml")
+        self.mjModel.opt.timestep = self.simulation_dt
+        self.mjData = mujoco.MjData(self.mjModel)
+        keyframe_id = mujoco.mj_name2id(self.mjModel, mujoco.mjtObj.mjOBJ_KEY, "home")
+        self.mjData.qpos = self.mjModel.key_qpos[keyframe_id]
+        mujoco.mj_forward(self.mjModel, self.mjData)
 
-    robot_name = config.robot
-    scene_name = config.scene
-    simulation_dt = 0.002
+        self.viewer = mujoco.viewer.launch_passive(
+            self.mjModel,
+            self.mjData,
+            show_left_ui=False,
+            show_right_ui=False,
+        )
+        mujoco.mjv_defaultFreeCamera(self.mjModel, self.viewer.cam)
+        self.last_render_time = time.time()
+        self.RENDER_FREQ = 30.0
 
+        self.locomotion_policy = LocomotionPolicyWrapper(mjModel=self.mjModel)
 
-    # Create the quadruped robot environment -----------------------------------------------------------
-    env = QuadrupedEnv(
-        robot=robot_name,
-        scene=scene_name,
-        sim_dt=simulation_dt,
-        base_vel_command_type="human",  # "forward", "random", "forward+rotate", "human"
-    )
+        if self.locomotion_policy.use_vision:
+            resolution_heightmap = config.training_env["perceptive_height_scanner"]["pattern_cfg"]["resolution"]
+            num_rows_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][0] / resolution_heightmap) + 1
+            num_cols_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][1] / resolution_heightmap) + 1
+            self.heightmap_offset = config.training_env["perceptive_height_scanner"]["offset"]
+            self.heightmap = HeightMap(
+                num_rows=num_rows_heightmap,
+                num_cols=num_cols_heightmap,
+                dist_x=resolution_heightmap,
+                dist_y=resolution_heightmap,
+                mj_model=self.mjModel,
+                mj_data=self.mjData,
+            )
 
+        self.legs_joints_position = np.zeros(12)
+        self.legs_joints_velocity = np.zeros(12)
+        self.desired_joint_pos_leg = self.mjData.qpos[7:19].copy()
+        self.Kp_legs = 0.0
+        self.Kd_legs = 0.0
+        self.ref_base_lin_vel_H = np.zeros(3)
+        self.ref_base_ang_yaw_dot = 0.0
 
-    env.reset(random=False)
-    env.render()  # Pass in the first render call any mujoco.viewer.KeyCallbackType
+        from console import Console
 
+        self.console = Console(controller_node=self)
+        thread_console = threading.Thread(target=self.console.interactive_command_line)
+        thread_console.daemon = True
+        thread_console.start()
+        self.console.isDown = False
+        self.console.isRLActivated = True
 
+        # 10-phase schedule: normal phases (0,2,4,6,8) = 3s, others = 4s
+        self.PHASE_DURATIONS = [3.0, 4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 4.0]
+        self.PHASE_STEPS = [int(duration / self.simulation_dt) for duration in self.PHASE_DURATIONS]
+        self.PHASE_STEPS_TOTAL = sum(self.PHASE_STEPS)
+        #Test Phase options:
+        # None: cycle through all phases
+        # 0: all legsfine
+        # 1: rear legs failed
+        # 3: FL leg failed
+        # 5: FR leg failed
+        # 7: RL leg failed
+        # 9: RR leg failed
+        self.TEST_PHASE = 3
 
-    # Initialization of variables used in the main control loop --------------------------------
-    locomotion_policy = LocomotionPolicyWrapper(env=env)
+    def run(self):
+        step_num = 1
+        while self.viewer.is_running():
+            step_start = time.time()
 
-    if(locomotion_policy.use_vision):
-        resolution_heightmap = config.training_env["perceptive_height_scanner"]["pattern_cfg"]["resolution"]
-        num_rows_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][0]/resolution_heightmap) + 1
-        num_cols_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][1]/resolution_heightmap) + 1
-        heightmap = HeightMap(num_rows=num_rows_heightmap, num_cols=num_cols_heightmap, dist_x=resolution_heightmap, dist_y=resolution_heightmap, mj_model=env.mjModel, mj_data=env.mjData)     
-    
+            qpos, qvel = self.mjData.qpos, self.mjData.qvel
+            base_lin_vel = mujoco_utils.base_lin_vel(self.mjData, frame="base")
+            base_ang_vel = mujoco_utils.base_ang_vel(self.mjData, frame="base")
+            base_ori_euler_xyz = mujoco_utils.base_ori_euler_xyz(self.mjData)
+            heading_orientation_SO3 = mujoco_utils.heading_orientation_SO3(self.mjData)
+            base_quat_wxyz = qpos[3:7]
+            base_pos = mujoco_utils.base_pos(self.mjData)
+            self.legs_joints_position = qpos[7:19].copy()
+            self.legs_joints_velocity = qvel[6:18].copy()
 
-    # --------------------------------------------------------------
-    RENDER_FREQ = 30  # Hz
-    last_render_time = time.time()
-    # 10-phase schedule: normal phases (0,2,4,6,8) = 3s, others = 4s
-    PHASE_DURATIONS = [3.0, 4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 4.0, 3.0, 4.0]
-    PHASE_STEPS = [int(duration / simulation_dt) for duration in PHASE_DURATIONS]
-    PHASE_STEPS_TOTAL = sum(PHASE_STEPS)
-    #Test Phase options:
-    # None: cycle through all phases
-    # 0: all legsfine
-    # 1: rear legs failed
-    # 3: FL leg failed
-    # 5: FR leg failed
-    # 7: RL leg failed
-    # 9: RR leg failed
-    TEST_PHASE = 0
+            if config.training_env["use_imu"] or config.training_env["use_concurrent_state_est"]:
+                imu_linear_acceleration = self.mjData.sensordata[0:3]
+                imu_angular_velocity = self.mjData.sensordata[3:6]
+                imu_orientation = self.mjData.sensordata[9:13]
+                imu_orientation = base_quat_wxyz
+            else:
+                imu_linear_acceleration = np.zeros(3)
+                imu_angular_velocity = np.zeros(3)
+                imu_orientation = np.zeros(4)
 
+            ref_base_lin_vel, ref_base_ang_vel = mujoco_utils.target_base_vel(
+                self.mjData,
+                self.ref_base_lin_vel_H,
+                self.ref_base_ang_yaw_dot,
+                frame="world",
+            )
 
-    while True:
-        step_start = time.time()
-        
-        # Get the current state of the robot -----------------------------------------------------
-        qpos, qvel = env.mjData.qpos, env.mjData.qvel
-        base_lin_vel = env.base_lin_vel(frame='base')
-        base_ang_vel = env.base_ang_vel(frame='base')
-        base_ori_euler_xyz = env.base_ori_euler_xyz
-        heading_orientation_SO3 = env.heading_orientation_SO3
-        base_quat_wxyz = qpos[3:7]
-        base_pos = env.base_pos
+            if self.locomotion_policy.use_vision:
+                offset_world_frame = self.heightmap_offset["pos"] @ heading_orientation_SO3.T
+                self.heightmap.update_height_map(base_pos + offset_world_frame, yaw=base_ori_euler_xyz[2])
 
-        if(config.training_env["use_imu"] or config.training_env["use_concurrent_state_est"]):
-            imu_linear_acceleration = env.mjData.sensordata[0:3]
-            imu_angular_velocity = env.mjData.sensordata[3:6]
-            imu_orientation = env.mjData.sensordata[9:13]
-            imu_orientation = base_quat_wxyz
-        else:
-            imu_linear_acceleration = np.zeros(3)
-            imu_angular_velocity = np.zeros(3)
-            imu_orientation = np.zeros(4)
+            if self.TEST_PHASE is not None:
+                phase = self.TEST_PHASE
+            else:
+                cycle_step = step_num % self.PHASE_STEPS_TOTAL
+                cumulative_steps = 0
+                phase = 0
+                for idx, steps in enumerate(self.PHASE_STEPS):
+                    cumulative_steps += steps
+                    if cycle_step < cumulative_steps:
+                        phase = idx
+                        break
+            # Update leg indicator for the observation input to the policy
+            self.locomotion_policy._per_leg_joint_status = np.ones((4,3), dtype=np.float32)
+            if phase in (0, 2, 4, 6, 8):
+                # all_fine
+                pass
+            elif phase == 1:
+                # rear failed
+                self.locomotion_policy._per_leg_joint_status[2, :] = 0.0
+                self.locomotion_policy._per_leg_joint_status[3, :] = 0.0
+            elif phase == 3:
+                # FL leg failed 
+                self.locomotion_policy._per_leg_joint_status[0, :] = 0.0
+            elif phase == 5:
+                # FR leg failed
+                self.locomotion_policy._per_leg_joint_status[1, :] = 0.0
+            elif phase == 7:
+                # RL leg failed
+                self.locomotion_policy._per_leg_joint_status[2, :] = 0.0
+            elif phase == 9:
+                # RR leg failed
+                self.locomotion_policy._per_leg_joint_status[3, :] = 0.0
+            else:
+                pass
 
-        joints_pos = LegsAttr(*[np.zeros((1, int(env.mjModel.nu/4))) for _ in range(4)])
-        joints_pos.FL = qpos[env.legs_qpos_idx.FL]
-        joints_pos.FR = qpos[env.legs_qpos_idx.FR]
-        joints_pos.RL = qpos[env.legs_qpos_idx.RL]
-        joints_pos.RR = qpos[env.legs_qpos_idx.RR]
-    
-        joints_vel = LegsAttr(*[np.zeros((1, int(env.mjModel.nu/4))) for _ in range(4)])
-        joints_vel.FL = qvel[env.legs_qvel_idx.FL]
-        joints_vel.FR = qvel[env.legs_qvel_idx.FR]
-        joints_vel.RL = qvel[env.legs_qvel_idx.RL]
-        joints_vel.RR = qvel[env.legs_qvel_idx.RR]
-        ref_base_lin_vel, ref_base_ang_vel = env.target_base_vel()
+            if self.console.isRLActivated and step_num % round(1 / (self.locomotion_policy.RL_FREQ * self.simulation_dt)) == 0:
+                self.desired_joint_pos_leg = self.locomotion_policy.compute_control(
+                    base_pos=base_pos,
+                    base_ori_euler_xyz=base_ori_euler_xyz,
+                    base_quat_wxyz=base_quat_wxyz,
+                    base_lin_vel=base_lin_vel,
+                    base_ang_vel=base_ang_vel,
+                    heading_orientation_SO3=heading_orientation_SO3,
+                    joints_pos_leg=self.legs_joints_position,
+                    joints_vel_leg=self.legs_joints_velocity,
+                    ref_base_lin_vel=ref_base_lin_vel,
+                    ref_base_ang_vel=ref_base_ang_vel,
+                    imu_linear_acceleration=imu_linear_acceleration,
+                    imu_angular_velocity=imu_angular_velocity,
+                    imu_orientation=imu_orientation,
+                    heightmap_data=self.heightmap.data if self.locomotion_policy.use_vision else None,
+                )
+                self.Kp_legs = self.locomotion_policy.Kp_walking
+                self.Kd_legs = self.locomotion_policy.Kd_walking
+            else:
+                self.Kp_legs = self.locomotion_policy.Kp_stand_up_and_down
+                self.Kd_legs = self.locomotion_policy.Kd_stand_up_and_down
 
-        if(locomotion_policy.use_vision):
-            heightmap.update_height_map(env.mjData.qpos[0:3], yaw=env.base_ori_euler_xyz[2])
-    
-        
-        if TEST_PHASE is not None:
-            phase = TEST_PHASE
-        else:
-            cycle_step = env.step_num % PHASE_STEPS_TOTAL
-            cumulative_steps = 0
-            phase = 0
-            for idx, steps in enumerate(PHASE_STEPS):
-                cumulative_steps += steps
-                if cycle_step < cumulative_steps:
-                    phase = idx
-                    break
-        # Update leg indicator for the observation input to the policy
-        locomotion_policy._per_leg_joint_status = np.ones((4,3), dtype=np.float32)
-        if phase in (0, 2, 4, 6, 8):
-            # all_fine
-            pass
-        elif phase == 1:
-            # rear failed
-            locomotion_policy._per_leg_joint_status[2, :] = 0.0
-            locomotion_policy._per_leg_joint_status[3, :] = 0.0
-        elif phase == 3:
-            # FL leg failed 
-            locomotion_policy._per_leg_joint_status[0, :] = 0.0
-        elif phase == 5:
-            # FR leg failed
-            locomotion_policy._per_leg_joint_status[1, :] = 0.0
-        elif phase == 7:
-            # RL leg failed
-            locomotion_policy._per_leg_joint_status[2, :] = 0.0
-        elif phase == 9:
-            # RR leg failed
-            locomotion_policy._per_leg_joint_status[3, :] = 0.0
-        else:
-            pass
+            max_torque = self.mjModel.actuator_ctrlrange[0:12, 1] * 0.95
+            lower = (-max_torque + self.Kd_legs * self.legs_joints_velocity) / self.Kp_legs
+            upper = (max_torque + self.Kd_legs * self.legs_joints_velocity) / self.Kp_legs
+            self.desired_joint_pos_leg = np.clip(
+                self.desired_joint_pos_leg,
+                self.legs_joints_position + lower,
+                self.legs_joints_position + upper,
+            )
 
+            tau_leg = self.Kp_legs * (self.desired_joint_pos_leg - self.legs_joints_position) - self.Kd_legs * self.legs_joints_velocity
 
-        # RL controller --------------------------------------------------------------
-        if env.step_num % round(1 / (locomotion_policy.RL_FREQ * simulation_dt)) == 0:            
-            
-            desired_joint_pos = locomotion_policy.compute_control(
-                        base_pos=base_pos, 
-                        base_ori_euler_xyz=base_ori_euler_xyz, 
-                        base_quat_wxyz=base_quat_wxyz,
-                        base_lin_vel=base_lin_vel, 
-                        base_ang_vel=base_ang_vel,
-                        heading_orientation_SO3=heading_orientation_SO3,
-                        joints_pos=joints_pos, 
-                        joints_vel=joints_vel,
-                        ref_base_lin_vel=ref_base_lin_vel, 
-                        ref_base_ang_vel=ref_base_ang_vel,
-                        imu_linear_acceleration=imu_linear_acceleration,
-                        imu_angular_velocity=imu_angular_velocity,
-                        imu_orientation=imu_orientation,
-                        heightmap_data=heightmap.data if locomotion_policy.use_vision else None)
+            # Apply leg failures by zeroing out the corresponding torques ------------------------------------------------------
+            tau_leg = tau_leg * self.locomotion_policy._per_leg_joint_status.flatten()
 
-        # PD controller --------------------------------------------------------------
-        else:
-            desired_joint_pos = locomotion_policy.desired_joint_pos
+            self.mjData.ctrl[0:12] = tau_leg
+            mujoco.mj_step(self.mjModel, self.mjData)
+            step_num += 1
 
+            loop_elapsed_time = time.time() - step_start
+            if loop_elapsed_time < self.simulation_dt:
+                time.sleep(self.simulation_dt - loop_elapsed_time)
 
-        Kp = locomotion_policy.Kp_walking
-        Kd = locomotion_policy.Kd_walking
+            if time.time() - self.last_render_time > 1.0 / self.RENDER_FREQ:
+                self.viewer.cam.lookat[:] = base_pos
+                self.viewer.sync()
+                self.last_render_time = time.time()
 
-        error_joints_pos = LegsAttr(*[np.zeros((1, int(env.mjModel.nu/4))) for _ in range(4)])
-        error_joints_pos.FL = desired_joint_pos.FL - joints_pos.FL
-        error_joints_pos.FR = desired_joint_pos.FR - joints_pos.FR
-        error_joints_pos.RL = desired_joint_pos.RL - joints_pos.RL
-        error_joints_pos.RR = desired_joint_pos.RR - joints_pos.RR
-        
-        tau = LegsAttr(*[np.zeros((1, int(env.mjModel.nu/4))) for _ in range(4)])
-        tau.FL = Kp * (error_joints_pos.FL) - Kd * joints_vel.FL
-        tau.FR = Kp * (error_joints_pos.FR) - Kd * joints_vel.FR
-        tau.RL = Kp * (error_joints_pos.RL) - Kd * joints_vel.RL
-        tau.RR = Kp * (error_joints_pos.RR) - Kd * joints_vel.RR
-        
-        # Apply leg failures by zeroing out the corresponding torques ------------------------------------------------------
-        tau.FL[0] *= locomotion_policy._per_leg_joint_status[0, 0]
-        tau.FL[1] *= locomotion_policy._per_leg_joint_status[0, 1]
-        tau.FL[2] *= locomotion_policy._per_leg_joint_status[0, 2]
-        tau.FR[0] *= locomotion_policy._per_leg_joint_status[1, 0]
-        tau.FR[1] *= locomotion_policy._per_leg_joint_status[1, 1]
-        tau.FR[2] *= locomotion_policy._per_leg_joint_status[1, 2]
-        tau.RL[0] *= locomotion_policy._per_leg_joint_status[2, 0]
-        tau.RL[1] *= locomotion_policy._per_leg_joint_status[2, 1]
-        tau.RL[2] *= locomotion_policy._per_leg_joint_status[2, 2]
-        tau.RR[0] *= locomotion_policy._per_leg_joint_status[3, 0]
-        tau.RR[1] *= locomotion_policy._per_leg_joint_status[3, 1]
-        tau.RR[2] *= locomotion_policy._per_leg_joint_status[3, 2]
-
-        # Set control and mujoco step ----------------------------------------------------------------------
-        action = np.zeros(env.mjModel.nu)
-        action[env.legs_tau_idx.FL] = tau.FL.reshape((3,))
-        action[env.legs_tau_idx.FR] = tau.FR.reshape((3,))
-        action[env.legs_tau_idx.RL] = tau.RL.reshape((3,))
-        action[env.legs_tau_idx.RR] = tau.RR.reshape((3,))
-        state, reward, is_terminated, is_truncated, info = env.step(action=action)
-
-
-        # Sleep to match real-time ---------------------------------------------------------
-        loop_elapsed_time = time.time() - step_start
-
-        if(loop_elapsed_time < simulation_dt):
-            time.sleep(simulation_dt - (loop_elapsed_time))
-
-        # Render only at a certain frequency -----------------------------------------------------------------
-        if time.time() - last_render_time > 1.0 / RENDER_FREQ or env.step_num == 1:
-            env.render()
-            last_render_time = time.time()
-
-            if(locomotion_policy.use_vision):
-                if heightmap.data is not None:
-                    for i in range(heightmap.data.shape[0]):
-                        for j in range(heightmap.data.data.shape[1]):
-                            heightmap.geom_ids[i, j] = render_sphere(
-                                viewer=env.viewer,
-                                position=([heightmap.data[i][j][0][0], heightmap.data[i][j][0][1], heightmap.data[i][j][0][2]]),
+                if self.locomotion_policy.use_vision and self.heightmap.data is not None:
+                    for i in range(self.heightmap.data.shape[0]):
+                        for j in range(self.heightmap.data.shape[1]):
+                            self.heightmap.geom_ids[i, j] = mujoco_utils.render_sphere(
+                                viewer=self.viewer,
+                                position=self.heightmap.data[i, j, 0],
                                 diameter=0.02,
                                 color=[0, 1, 0, 0.5],
-                                geom_id=heightmap.geom_ids[i, j],
+                                geom_id=self.heightmap.geom_ids[i, j],
                             )
 
 
-                
-
-    env.close()
-
+if __name__ == "__main__":
+    play_mujoco = PlayMujoco()
+    play_mujoco.run()
