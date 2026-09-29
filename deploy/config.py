@@ -23,8 +23,8 @@ elif(robot == "b2"):
     Kd_stand_up_and_down = 5.
 
 elif(robot == "pegasus"):
-    Kp_walking = 200.
-    Kd_walking = 10.
+    Kp_walking = 120.
+    Kd_walking = 6.
 
     Kp_stand_up_and_down = 200.
     Kd_stand_up_and_down = 10.
