@@ -253,6 +253,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
         pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[0.6, 0.6]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )
 
     # Template copied onto each foot link to measure the terrain immediately around that foot.
@@ -263,6 +264,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
         pattern_cfg=patterns.GridPatternCfg(resolution=0.05, size=[0.1, 0.1]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )
 
     # asymmetric ppo
@@ -297,6 +299,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         physics=PhysicsCfg(),
+        use_newton_actuators=False,
         #default_visualizer_cfg=NewtonGLVisualizerCfg(max_visible_envs=128)
     )
 
@@ -547,4 +550,5 @@ class Go2RoughVisionEnvCfg(Go2RoughBlindEnvCfg):
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.2, 1.2]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )

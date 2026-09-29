@@ -229,22 +229,24 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
 
     # Base-centered height scanner for pose-related rewards and privileged observations.
     pose_height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
+        prim_path="/World/envs/env_.*/Robot/Geometry/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
         ray_alignment='yaw',
         pattern_cfg=patterns.GridPatternCfg(resolution=0.2, size=[0.6, 0.6]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )
 
     # Template copied onto each foot link to measure the terrain immediately around that foot.
     foot_height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/FL_foot",
+        prim_path="/World/envs/env_.*/Robot/Geometry/base/FL_hip/FL_thigh/FL_calf/FL_foot",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.5)),
         ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.05, size=[0.1, 0.1]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )
 
     # asymmetric ppo
@@ -280,6 +282,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
         physics=PhysicsCfg(),
+        use_newton_actuators=False,
     )
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -297,9 +300,10 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
 
     # an imu sensor in case we don't want any state estimator (for now we can't use sites from the xml)
     imu = ImuCfg(
-        prim_path="/World/envs/env_.*/Robot/base", 
+        prim_path="/World/envs/env_.*/Robot/Geometry/base",
         offset=ImuCfg.OffsetCfg(
-            pos=(-0.02557, 0, 0.04232)
+            pos=(-0.0085648, -0.0065251, -0.03696),
+            rot=(0, 0, -0.70710678, 0.70710678)
         ), 
         debug_vis=False)
 
@@ -523,10 +527,11 @@ class PegasusRoughVisionEnvCfg(PegasusRoughBlindEnvCfg):
 
     # we add a height scanner for perceptive locomotion
     perceptive_height_scanner = RayCasterCfg(
-        prim_path="/World/envs/env_.*/Robot/base",
+        prim_path="/World/envs/env_.*/Robot/Geometry/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
         ray_alignment='yaw',
         pattern_cfg=patterns.GridPatternCfg(resolution=0.10, size=[1.2, 1.2]),
         debug_vis=False,
         mesh_prim_paths=["/World/ground"],
+        global_world_only=True,
     )
