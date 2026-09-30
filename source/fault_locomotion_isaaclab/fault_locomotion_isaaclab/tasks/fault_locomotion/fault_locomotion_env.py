@@ -18,7 +18,7 @@ from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns, Imu
+from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns, Imu, Pva, PvaCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils.configclass import configclass
@@ -238,6 +238,17 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._imu = Imu(self.cfg.imu)
         self.scene.sensors["imu"] = self._imu
 
+        # Report ideal projected gravity in the same frame as the IMU measurements.
+        self._pva = Pva(PvaCfg(
+            prim_path=self.cfg.imu.prim_path,
+            update_period=self.cfg.imu.update_period,
+            offset=PvaCfg.OffsetCfg(
+                pos=self.cfg.imu.offset.pos,
+                rot=self.cfg.imu.offset.rot,
+            ),
+        ))
+        self.scene.sensors["pva"] = self._pva
+
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
@@ -369,12 +380,12 @@ class FaultLocomotionEnv(DirectRLEnv):
             # If Concurrent SE/Learned State Estimator, we predict linear and angular vel from IMU
             velocity_b = custom_observations._get_concurrent_state_estimation(self)
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._robot.data.projected_gravity_b
+            projected_gravity_b = self._pva.data.projected_gravity_b
         elif(self.cfg.use_imu):
             # Using directly the IMU
             velocity_b = self._imu.data.lin_acc_b
             angular_velocity_b = self._imu.data.ang_vel_b
-            projected_gravity_b = self._robot.data.projected_gravity_b
+            projected_gravity_b = self._pva.data.projected_gravity_b
         else:
             #Using a model-based state estimation
             velocity_b = self._robot.data.root_lin_vel_b
