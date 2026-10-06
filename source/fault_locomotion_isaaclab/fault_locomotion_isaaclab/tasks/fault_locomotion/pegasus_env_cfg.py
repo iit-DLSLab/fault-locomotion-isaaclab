@@ -460,7 +460,8 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     
     feet_to_hip_distance_reward_scale = 1.5
     # This is used in locomotion_env.py for the above reward
-    desired_hip_offset = 0.095
+    desired_hip_offset_y = 0.148
+    desired_hip_offset_x = 0.112
 
     com_support_polygon_reward_scale = 1.0
     com_support_polygon_margin = 0.03

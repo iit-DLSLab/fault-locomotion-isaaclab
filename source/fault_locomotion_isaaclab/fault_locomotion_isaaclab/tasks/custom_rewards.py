@@ -494,10 +494,13 @@ def feet_to_hip_distance_l2(self):
     ].unsqueeze(1)
     hip_to_base_h = torch.matmul(ROT_W2H.transpose(1, 2), hip_to_base_w.transpose(1, 2))
 
-    desired_hip_offset = self._desired_hip_offset
-    feet_to_hip_distance_x = torch.square(feet_to_base_h[:, 0] - hip_to_base_h[:, 0]) * legs_status
+    desired_hip_offset_y = self._desired_hip_offset_y
+    desired_hip_offset_x = self._desired_hip_offset_x
+    feet_to_hip_distance_x = (
+        torch.square(feet_to_base_h[:, 0] + desired_hip_offset_x.unsqueeze(0) - hip_to_base_h[:, 0]) * legs_status
+    )
     feet_to_hip_distance_y = (
-        torch.square(feet_to_base_h[:, 1] + desired_hip_offset.unsqueeze(0) - hip_to_base_h[:, 1]) * legs_status
+        torch.square(feet_to_base_h[:, 1] + desired_hip_offset_y.unsqueeze(0) - hip_to_base_h[:, 1]) * legs_status
     )
     feet_to_hip_distance = -torch.sum(torch.sqrt(feet_to_hip_distance_x + feet_to_hip_distance_y), dim=1)
 
