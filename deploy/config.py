@@ -33,7 +33,7 @@ else:
     raise ValueError(f"Robot {robot} not supported")
 
 # ----------------------------------------------------------------------------------------------------------------
-policy_folder_path = dir_path + "/../tested_policies/" + robot + "/ppo"
+policy_folder_path = dir_path + "/../tested_policies/" + robot + "/moe_blind"
 concurrent_state_est_network = policy_folder_path + "/exported/concurrent_state_estimator.pth"
 rma_network = policy_folder_path + "/exported/rma.pth"
 
