@@ -405,6 +405,11 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     fr_all_failed = 0
     rl_all_failed = 1
     rr_all_failed = 0
+    # two legs failures: lateral (fl_rl, fr_rr) and diagonal (fl_rr, fr_rl)
+    fl_rl_all_failed = 1
+    fr_rr_all_failed = 1
+    fl_rr_all_failed = 1
+    fr_rl_all_failed = 1
     failure_type_activation = [
                         all_fine, 
                         rl_rr_all_failed, 
@@ -414,7 +419,8 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
                         fl_calf_failed, fr_calf_failed, rl_calf_failed, rr_calf_failed,
                         fl_hip_thigh_failed, fr_hip_thigh_failed, rl_hip_thigh_failed, rr_hip_thigh_failed,
                         fl_hip_calf_failed, fr_hip_calf_failed, rl_hip_calf_failed, rr_hip_calf_failed,
-                        fl_all_failed, fr_all_failed, rl_all_failed, rr_all_failed
+                        fl_all_failed, fr_all_failed, rl_all_failed, rr_all_failed,
+                        fl_rl_all_failed, fr_rr_all_failed, fl_rr_all_failed, fr_rl_all_failed
                         ]
 
     desired_joints_order = ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',

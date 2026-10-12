@@ -552,6 +552,78 @@ def _failures_event_setter(self, env_ids, failure_type):
         asset.actuators["calf"].stiffness[rr_all_failed_envs, RR_calf] = 0.0
         asset.actuators["calf"].damping[rr_all_failed_envs, RR_calf] = 0.0
 
+    # fl_rl_all_failed (disable all left joints)
+    fl_rl_all_failed_mask = failure_type[env_ids] == 30
+    if torch.any(fl_rl_all_failed_mask):
+        fl_rl_all_failed_envs = env_ids[fl_rl_all_failed_mask]
+
+        # Legs: FL=0, RL=2; Joints: hip=0, thigh=1, calf=2
+        self._per_leg_joint_status[fl_rl_all_failed_envs, 0, :] = 0.0
+        self._per_leg_joint_status[fl_rl_all_failed_envs, 2, :] = 0.0
+
+        # Apply zero scaling to legs FL and RL for the failed envs
+        for leg_hip, leg_thigh, leg_calf in ((FL_hip, FL_thigh, FL_calf), (RL_hip, RL_thigh, RL_calf)):
+            asset.actuators["hip"].stiffness[fl_rl_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["hip"].damping[fl_rl_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["thigh"].stiffness[fl_rl_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["thigh"].damping[fl_rl_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["calf"].stiffness[fl_rl_all_failed_envs, leg_calf] = 0.0
+            asset.actuators["calf"].damping[fl_rl_all_failed_envs, leg_calf] = 0.0
+
+    # fr_rr_all_failed (disable all right joints)
+    fr_rr_all_failed_mask = failure_type[env_ids] == 31
+    if torch.any(fr_rr_all_failed_mask):
+        fr_rr_all_failed_envs = env_ids[fr_rr_all_failed_mask]
+
+        # Legs: FR=1, RR=3; Joints: hip=0, thigh=1, calf=2
+        self._per_leg_joint_status[fr_rr_all_failed_envs, 1, :] = 0.0
+        self._per_leg_joint_status[fr_rr_all_failed_envs, 3, :] = 0.0
+
+        # Apply zero scaling to legs FR and RR for the failed envs
+        for leg_hip, leg_thigh, leg_calf in ((FR_hip, FR_thigh, FR_calf), (RR_hip, RR_thigh, RR_calf)):
+            asset.actuators["hip"].stiffness[fr_rr_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["hip"].damping[fr_rr_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["thigh"].stiffness[fr_rr_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["thigh"].damping[fr_rr_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["calf"].stiffness[fr_rr_all_failed_envs, leg_calf] = 0.0
+            asset.actuators["calf"].damping[fr_rr_all_failed_envs, leg_calf] = 0.0
+
+    # fl_rr_all_failed (disable all joints of the FL-RR diagonal)
+    fl_rr_all_failed_mask = failure_type[env_ids] == 32
+    if torch.any(fl_rr_all_failed_mask):
+        fl_rr_all_failed_envs = env_ids[fl_rr_all_failed_mask]
+
+        # Legs: FL=0, RR=3; Joints: hip=0, thigh=1, calf=2
+        self._per_leg_joint_status[fl_rr_all_failed_envs, 0, :] = 0.0
+        self._per_leg_joint_status[fl_rr_all_failed_envs, 3, :] = 0.0
+
+        # Apply zero scaling to legs FL and RR for the failed envs
+        for leg_hip, leg_thigh, leg_calf in ((FL_hip, FL_thigh, FL_calf), (RR_hip, RR_thigh, RR_calf)):
+            asset.actuators["hip"].stiffness[fl_rr_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["hip"].damping[fl_rr_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["thigh"].stiffness[fl_rr_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["thigh"].damping[fl_rr_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["calf"].stiffness[fl_rr_all_failed_envs, leg_calf] = 0.0
+            asset.actuators["calf"].damping[fl_rr_all_failed_envs, leg_calf] = 0.0
+
+    # fr_rl_all_failed (disable all joints of the FR-RL diagonal)
+    fr_rl_all_failed_mask = failure_type[env_ids] == 33
+    if torch.any(fr_rl_all_failed_mask):
+        fr_rl_all_failed_envs = env_ids[fr_rl_all_failed_mask]
+
+        # Legs: FR=1, RL=2; Joints: hip=0, thigh=1, calf=2
+        self._per_leg_joint_status[fr_rl_all_failed_envs, 1, :] = 0.0
+        self._per_leg_joint_status[fr_rl_all_failed_envs, 2, :] = 0.0
+
+        # Apply zero scaling to legs FR and RL for the failed envs
+        for leg_hip, leg_thigh, leg_calf in ((FR_hip, FR_thigh, FR_calf), (RL_hip, RL_thigh, RL_calf)):
+            asset.actuators["hip"].stiffness[fr_rl_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["hip"].damping[fr_rl_all_failed_envs, leg_hip] = 0.0
+            asset.actuators["thigh"].stiffness[fr_rl_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["thigh"].damping[fr_rl_all_failed_envs, leg_thigh] = 0.0
+            asset.actuators["calf"].stiffness[fr_rl_all_failed_envs, leg_calf] = 0.0
+            asset.actuators["calf"].damping[fr_rl_all_failed_envs, leg_calf] = 0.0
+
 
 def randomize_pace_actuator_delay(
     env: ManagerBasedEnv,

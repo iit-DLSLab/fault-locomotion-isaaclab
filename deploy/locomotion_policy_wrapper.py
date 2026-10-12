@@ -120,96 +120,15 @@ class LocomotionPolicyWrapper:
         legs_status = legs_status.reshape(legs_status.shape[0], -1)
         legs_down = ~legs_status
         num_legs_down = legs_down.sum(axis=1)
-        old_actions = actions.copy()
 
-        fl_down_mask = legs_down[:, 0] & (num_legs_down == 1)
-        actions[fl_down_mask, 0] = old_actions[fl_down_mask, 9]
-        actions[fl_down_mask, 4] = old_actions[fl_down_mask, 10]
-        actions[fl_down_mask, 8] = old_actions[fl_down_mask, 11]
-
-        actions[fl_down_mask, 1] = old_actions[fl_down_mask, 0]
-        actions[fl_down_mask, 5] = old_actions[fl_down_mask, 1]
-        actions[fl_down_mask, 9] = old_actions[fl_down_mask, 2]
-
-        actions[fl_down_mask, 2] = old_actions[fl_down_mask, 3]
-        actions[fl_down_mask, 6] = old_actions[fl_down_mask, 4]
-        actions[fl_down_mask, 10] = old_actions[fl_down_mask, 5]
-
-        actions[fl_down_mask, 3] = old_actions[fl_down_mask, 6]
-        actions[fl_down_mask, 7] = old_actions[fl_down_mask, 7]
-        actions[fl_down_mask, 11] = old_actions[fl_down_mask, 8]
-
-
-        fr_down_mask = legs_down[:, 1] & (num_legs_down == 1)
-        actions[fr_down_mask, 0] = old_actions[fr_down_mask, 0]
-        actions[fr_down_mask, 4] = old_actions[fr_down_mask, 1]
-        actions[fr_down_mask, 8] = old_actions[fr_down_mask, 2]
-
-        actions[fr_down_mask, 1] = old_actions[fr_down_mask, 9]
-        actions[fr_down_mask, 5] = old_actions[fr_down_mask, 10]
-        actions[fr_down_mask, 9] = old_actions[fr_down_mask, 11]
-
-        actions[fr_down_mask, 2] = old_actions[fr_down_mask, 3]
-        actions[fr_down_mask, 6] = old_actions[fr_down_mask, 4]
-        actions[fr_down_mask, 10] = old_actions[fr_down_mask, 5]
-
-        actions[fr_down_mask, 3] = old_actions[fr_down_mask, 6]
-        actions[fr_down_mask, 7] = old_actions[fr_down_mask, 7]
-        actions[fr_down_mask, 11] = old_actions[fr_down_mask, 8]
-
-
-        rl_down_mask = legs_down[:, 2] & (num_legs_down == 1)
-        actions[rl_down_mask, 0] = old_actions[rl_down_mask, 0]
-        actions[rl_down_mask, 4] = old_actions[rl_down_mask, 1]
-        actions[rl_down_mask, 8] = old_actions[rl_down_mask, 2]
-
-        actions[rl_down_mask, 1] = old_actions[rl_down_mask, 3]
-        actions[rl_down_mask, 5] = old_actions[rl_down_mask, 4]
-        actions[rl_down_mask, 9] = old_actions[rl_down_mask, 5]
-
-        actions[rl_down_mask, 2] = old_actions[rl_down_mask, 9]
-        actions[rl_down_mask, 6] = old_actions[rl_down_mask, 10]
-        actions[rl_down_mask, 10] = old_actions[rl_down_mask, 11]
-
-        actions[rl_down_mask, 3] = old_actions[rl_down_mask, 6]
-        actions[rl_down_mask, 7] = old_actions[rl_down_mask, 7]
-        actions[rl_down_mask, 11] = old_actions[rl_down_mask, 8]
-
-
-        rr_down_mask = legs_down[:, 3] & (num_legs_down == 1)
-        actions[rr_down_mask, 0] = old_actions[rr_down_mask, 0]
-        actions[rr_down_mask, 4] = old_actions[rr_down_mask, 1]
-        actions[rr_down_mask, 8] = old_actions[rr_down_mask, 2]
-
-        actions[rr_down_mask, 1] = old_actions[rr_down_mask, 3]
-        actions[rr_down_mask, 5] = old_actions[rr_down_mask, 4]
-        actions[rr_down_mask, 9] = old_actions[rr_down_mask, 5] 
-
-        actions[rr_down_mask, 2] = old_actions[rr_down_mask, 6]
-        actions[rr_down_mask, 6] = old_actions[rr_down_mask, 7]
-        actions[rr_down_mask, 10] = old_actions[rr_down_mask, 8]
-
-        actions[rr_down_mask, 3] = old_actions[rr_down_mask, 9]
-        actions[rr_down_mask, 7] = old_actions[rr_down_mask, 10]
-        actions[rr_down_mask, 11] = old_actions[rr_down_mask, 11]
-        
-
-        rl_rr_down_mask = legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2)
-        actions[rl_rr_down_mask, 0] = old_actions[rl_rr_down_mask, 0]
-        actions[rl_rr_down_mask, 4] = old_actions[rl_rr_down_mask, 1]
-        actions[rl_rr_down_mask, 8] = old_actions[rl_rr_down_mask, 2]
-
-        actions[rl_rr_down_mask, 1] = old_actions[rl_rr_down_mask, 3]
-        actions[rl_rr_down_mask, 5] = old_actions[rl_rr_down_mask, 4]
-        actions[rl_rr_down_mask, 9] = old_actions[rl_rr_down_mask, 5]
-
-        actions[rl_rr_down_mask, 2] = old_actions[rl_rr_down_mask, 6]
-        actions[rl_rr_down_mask, 6] = old_actions[rl_rr_down_mask, 7]
-        actions[rl_rr_down_mask, 10] = old_actions[rl_rr_down_mask, 8]
-
-        actions[rl_rr_down_mask, 3] = old_actions[rl_rr_down_mask, 9]
-        actions[rl_rr_down_mask, 7] = old_actions[rl_rr_down_mask, 10]
-        actions[rl_rr_down_mask, 11] = old_actions[rl_rr_down_mask, 11]
+        # The experts with a failure output the actions grouped per leg [hip, thigh, calf]: first the working
+        # legs, then the failed ones (zero padded), both in FL, FR, RL, RR order. E.g.
+        # fl_down -> [FR, RL, RR, FL], rl_rr_down -> [FL, FR, RL, RR], fl_rr_down -> [FR, RL, FL, RR]
+        # Here we bring them back to the training joint order (all hips, all thighs, all calves)
+        leg_slot = np.argsort(np.argsort(legs_down.astype(np.int64), axis=1, kind="stable"), axis=1)
+        joint_in_leg = np.arange(3).reshape(1, 3, 1)
+        source_ids = (3 * leg_slot[:, None, :] + joint_in_leg).reshape(legs_down.shape[0], -1)
+        actions = np.where((num_legs_down > 0)[:, None], np.take_along_axis(actions, source_ids, axis=1), actions)
 
         return actions.flatten()
 
@@ -401,6 +320,8 @@ class LocomotionPolicyWrapper:
             expert_activation[(legs_down[:, 0] | legs_down[:, 1]) & (num_legs_down == 1), 0] = 1.0
             expert_activation[(legs_down[:, 2] | legs_down[:, 3]) & (num_legs_down == 1), 0] = 2.0
             expert_activation[legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2), 0] = 3.0
+            expert_activation[((legs_down[:, 0] & legs_down[:, 2]) | (legs_down[:, 1] & legs_down[:, 3])) & (num_legs_down == 2), 0] = 4.0
+            expert_activation[((legs_down[:, 0] & legs_down[:, 3]) | (legs_down[:, 1] & legs_down[:, 2])) & (num_legs_down == 2), 0] = 5.0
             expert_activation = expert_activation.flatten()
             obs = np.concatenate((obs, expert_activation), axis=0)
             

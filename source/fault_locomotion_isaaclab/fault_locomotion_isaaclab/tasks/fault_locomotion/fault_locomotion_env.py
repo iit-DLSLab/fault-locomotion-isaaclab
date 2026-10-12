@@ -315,60 +315,17 @@ class FaultLocomotionEnv(DirectRLEnv):
             legs_status = legs_status.reshape(legs_status.shape[0], -1)
             legs_down = ~legs_status.bool()
             num_legs_down = legs_down.sum(dim=1)
-            old_actions = actions.clone()
 
-            fl_down_mask = legs_down[:, 0] & (num_legs_down == 1)
-            actions[fl_down_mask, 0] = old_actions[fl_down_mask, 9]
-            actions[fl_down_mask, 4] = old_actions[fl_down_mask, 10]
-            actions[fl_down_mask, 8] = old_actions[fl_down_mask, 11]
-            
-            actions[fl_down_mask, 1] = old_actions[fl_down_mask, 0]
-            actions[fl_down_mask, 5] = old_actions[fl_down_mask, 1]
-            actions[fl_down_mask, 9] = old_actions[fl_down_mask, 2]
+            # The experts with a failure output the actions grouped per leg [hip, thigh, calf]: first the working
+            # legs, then the failed ones (zero padded), both in FL, FR, RL, RR order. E.g.
+            # fl_down -> [FR, RL, RR, FL], rl_rr_down -> [FL, FR, RL, RR], fl_rr_down -> [FR, RL, FL, RR]
+            # Here we bring them back to cfg.desired_joints_order (all hips, all thighs, all calves).
+            # Not done in place, otherwise we would also modify the actions stored by the runner
+            leg_slot = torch.argsort(torch.argsort(legs_down.int(), dim=1, stable=True), dim=1)
+            joint_in_leg = torch.arange(3, device=self.device).view(1, 3, 1)
+            source_ids = (3 * leg_slot.unsqueeze(1) + joint_in_leg).reshape(legs_down.shape[0], -1)
+            actions = torch.where((num_legs_down > 0).unsqueeze(1), torch.gather(actions, 1, source_ids), actions)
 
-            actions[fl_down_mask, 2] = old_actions[fl_down_mask, 3]
-            actions[fl_down_mask, 6] = old_actions[fl_down_mask, 4]
-            actions[fl_down_mask, 10] = old_actions[fl_down_mask, 5]
-
-            actions[fl_down_mask, 3] = old_actions[fl_down_mask, 6]
-            actions[fl_down_mask, 7] = old_actions[fl_down_mask, 7]
-            actions[fl_down_mask, 11] = old_actions[fl_down_mask, 8]
-
-
-            rl_down_mask = legs_down[:, 2] & (num_legs_down == 1)
-            actions[rl_down_mask, 0] = old_actions[rl_down_mask, 0]
-            actions[rl_down_mask, 4] = old_actions[rl_down_mask, 1]
-            actions[rl_down_mask, 8] = old_actions[rl_down_mask, 2]
-            
-            actions[rl_down_mask, 1] = old_actions[rl_down_mask, 3]
-            actions[rl_down_mask, 5] = old_actions[rl_down_mask, 4]
-            actions[rl_down_mask, 9] = old_actions[rl_down_mask, 5]
-
-            actions[rl_down_mask, 2] = old_actions[rl_down_mask, 9]
-            actions[rl_down_mask, 6] = old_actions[rl_down_mask, 10]
-            actions[rl_down_mask, 10] = old_actions[rl_down_mask, 11]
-
-            actions[rl_down_mask, 3] = old_actions[rl_down_mask, 6]
-            actions[rl_down_mask, 7] = old_actions[rl_down_mask, 7]
-            actions[rl_down_mask, 11] = old_actions[rl_down_mask, 8]
-
-            rl_rr_down_mask = legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2)
-            actions[rl_rr_down_mask, 0] = old_actions[rl_rr_down_mask, 0]
-            actions[rl_rr_down_mask, 4] = old_actions[rl_rr_down_mask, 1]
-            actions[rl_rr_down_mask, 8] = old_actions[rl_rr_down_mask, 2]
-            
-            actions[rl_rr_down_mask, 1] = old_actions[rl_rr_down_mask, 3]
-            actions[rl_rr_down_mask, 5] = old_actions[rl_rr_down_mask, 4]
-            actions[rl_rr_down_mask, 9] = old_actions[rl_rr_down_mask, 5]
-
-            actions[rl_rr_down_mask, 2] = old_actions[rl_rr_down_mask, 6]
-            actions[rl_rr_down_mask, 6] = old_actions[rl_rr_down_mask, 7]
-            actions[rl_rr_down_mask, 10] = old_actions[rl_rr_down_mask, 8]
-
-            actions[rl_rr_down_mask, 3] = old_actions[rl_rr_down_mask, 9]
-            actions[rl_rr_down_mask, 7] = old_actions[rl_rr_down_mask, 10]
-            actions[rl_rr_down_mask, 11] = old_actions[rl_rr_down_mask, 11]
-      
 
         self._actions = actions.clone()
         
@@ -496,9 +453,11 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         # explicit expert_activation: scalar expert id
         # 0: all legs working
-        # 1: only FL down
-        # 2: only RL down
+        # 1: only one front leg down (FL or FR)
+        # 2: only one rear leg down (RL or RR)
         # 3: RL and RR down
+        # 4: lateral legs down (FL-RL or FR-RR)
+        # 5: diagonal legs down (FL-RR or FR-RL)
         """joints_status_per_leg_predicted = (
             joints_status
             .reshape(self._per_leg_joint_status.shape[0], self._per_leg_joint_status.shape[2], self._per_leg_joint_status.shape[1])
@@ -519,6 +478,12 @@ class FaultLocomotionEnv(DirectRLEnv):
         expert_activation[
             legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2), 0
         ] = 3.0
+        expert_activation[
+            ((legs_down[:, 0] & legs_down[:, 2]) | (legs_down[:, 1] & legs_down[:, 3])) & (num_legs_down == 2), 0
+        ] = 4.0
+        expert_activation[
+            ((legs_down[:, 0] & legs_down[:, 3]) | (legs_down[:, 1] & legs_down[:, 2])) & (num_legs_down == 2), 0
+        ] = 5.0
         observations["policy"] = torch.cat((observations["policy"], expert_activation), dim=-1)
         observations["critic"] = torch.cat((observations["critic"], expert_activation), dim=-1)
         # ------------------------------------------------------------------------------------------
@@ -607,22 +572,23 @@ class FaultLocomotionEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
-        # two_legs died check (only consider front hips for termination; ignore base and rear hips)  (used when failure_type == 1)
-        front_hip_ids = self._hip_contact_sensor_ids[:2]
-        two_legs_died_check = torch.any(torch.max(torch.norm(net_contact_forces[:, :, front_hip_ids], dim=-1), dim=1)[0] > 1.0,dim=1,)
+        legs_status = (self._per_leg_joint_status.all(dim=2)).float()
+        legs_status = legs_status.reshape(legs_status.shape[0], -1)
+        num_legs_down = (~legs_status.bool()).sum(dim=1)
 
-        # Check contacts for base and all hips (used when failure_type != 1)
+        # two_legs died check (only consider the hips of the working legs; ignore base and failed-leg hips)
+        # (used when two legs are down, e.g. rl_rr -> front hips, fl_rl -> right hips, fl_rr -> FR/RL hips)
+        hips_contact = torch.max(torch.norm(net_contact_forces[:, :, self._hip_contact_sensor_ids], dim=-1), dim=1)[0] > 1.0
+        two_legs_died_check = torch.any(hips_contact & legs_status.bool(), dim=1)
+
+        # Check contacts for base and all hips (used when less than two legs are down)
         died_check_base = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_contact_sensor_id], dim=-1), dim=1)[0] > 1.0,dim=1,)
-        died_check_hips = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._hip_contact_sensor_ids], dim=-1), dim=1)[0] > 1.0,dim=1,)
+        died_check_hips = torch.any(hips_contact, dim=1)
         died_check = torch.logical_or(died_check_base, died_check_hips)
 
-        #is_rear_both = self._failure_type == 1
-        legs_status = (self._per_leg_joint_status.all(dim=2)).float()
-        legs_status = legs_status.reshape(legs_status.shape[0], -1)   
-        num_legs_down = (~legs_status.bool()).sum(dim=1)
-        is_rl_rr_all_failed = num_legs_down >= 2 
-        
-        died = torch.where(is_rl_rr_all_failed, two_legs_died_check, died_check)
+        is_two_legs_failed = num_legs_down >= 2
+
+        died = torch.where(is_two_legs_failed, two_legs_died_check, died_check)
         
         return died, time_out
 
@@ -661,15 +627,17 @@ class FaultLocomotionEnv(DirectRLEnv):
                 self._terrain.terrain_levels[all_fine_ids] = random_level_all_fine
                 self._terrain.env_origins[all_fine_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[all_fine_ids], self._terrain.terrain_types[all_fine_ids]]
 
-            # rl-rr failed
-            rear_failed_ids = env_ids[self._failure_type[env_ids] == 1]
-            if rear_failed_ids.numel() > 0:
-                random_level_rear_failed = torch.randint_like(self._terrain.terrain_levels[rear_failed_ids], int(self._terrain.max_terrain_level//3.5))
-                self._terrain.terrain_levels[rear_failed_ids] = random_level_rear_failed
-                self._terrain.env_origins[rear_failed_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[rear_failed_ids], self._terrain.terrain_types[rear_failed_ids]]
+            # two legs failed (rl-rr, fl-rl, fr-rr, fl-rr, fr-rl)
+            two_legs_failure_types = torch.tensor([1, 30, 31, 32, 33], device=self.device)
+            two_legs_failed_mask = torch.isin(self._failure_type[env_ids], two_legs_failure_types)
+            two_legs_failed_ids = env_ids[two_legs_failed_mask]
+            if two_legs_failed_ids.numel() > 0:
+                random_level_two_legs_failed = torch.randint_like(self._terrain.terrain_levels[two_legs_failed_ids], int(self._terrain.max_terrain_level//3.5))
+                self._terrain.terrain_levels[two_legs_failed_ids] = random_level_two_legs_failed
+                self._terrain.env_origins[two_legs_failed_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[two_legs_failed_ids], self._terrain.terrain_types[two_legs_failed_ids]]
 
             # single leg failed (fl, fr, rl, rr)
-            single_leg_failed_ids = env_ids[(self._failure_type[env_ids] != 0) & (self._failure_type[env_ids] != 1)]
+            single_leg_failed_ids = env_ids[(self._failure_type[env_ids] != 0) & ~two_legs_failed_mask]
             if single_leg_failed_ids.numel() > 0:
                 random_level_single_leg_failed = torch.randint_like(self._terrain.terrain_levels[single_leg_failed_ids], int(self._terrain.max_terrain_level//2.0))
                 self._terrain.terrain_levels[single_leg_failed_ids] = random_level_single_leg_failed
