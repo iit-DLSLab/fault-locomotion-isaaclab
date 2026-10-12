@@ -37,6 +37,9 @@ ros-humble-desktop = "*"
 ros-humble-rmw-cyclonedds-cpp = "*"
 ros-humble-rosidl-generator-dds-idl = "*"
 ros-humble-plotjuggler-ros = "*"
+ros-humble-librealsense2 = "*"
+ros-humble-realsense2-camera-msgs = "*"
+ros-humble-realsense2-camera = "*"
 
 [feature.lyrical]
 channels = ["https://repo.prefix.dev/robostack-lyrical"]
@@ -46,6 +49,9 @@ ros-lyrical-desktop = "*"
 ros-lyrical-rmw-cyclonedds-cpp = "*"
 ros-lyrical-rosidl-generator-dds-idl = "*"
 ros-lyrical-plotjuggler-ros = "*"
+ros-lyrical-librealsense2 = "*"
+ros-lyrical-realsense2-camera-msgs = "*"
+ros-lyrical-realsense2-camera = "*"
 
 [environments]
 humble = ["common", "humble"]

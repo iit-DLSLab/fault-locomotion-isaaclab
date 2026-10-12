@@ -406,10 +406,10 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     rl_all_failed = 1
     rr_all_failed = 0
     # two legs failures: lateral (fl_rl, fr_rr) and diagonal (fl_rr, fr_rl)
-    fl_rl_all_failed = 1
-    fr_rr_all_failed = 1
-    fl_rr_all_failed = 1
-    fr_rl_all_failed = 1
+    fl_rl_all_failed = 0
+    fr_rr_all_failed = 0
+    fl_rr_all_failed = 0
+    fr_rl_all_failed = 0
     failure_type_activation = [
                         all_fine, 
                         rl_rr_all_failed, 
