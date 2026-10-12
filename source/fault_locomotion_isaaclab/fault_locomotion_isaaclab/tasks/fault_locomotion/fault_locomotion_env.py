@@ -574,17 +574,21 @@ class FaultLocomotionEnv(DirectRLEnv):
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
         legs_status = (self._per_leg_joint_status.all(dim=2)).float()
         legs_status = legs_status.reshape(legs_status.shape[0], -1)
-        num_legs_down = (~legs_status.bool()).sum(dim=1)
-
-        # two_legs died check (only consider the hips of the working legs; ignore base and failed-leg hips)
-        # (used when two legs are down, e.g. rl_rr -> front hips, fl_rl -> right hips, fl_rr -> FR/RL hips)
-        hips_contact = torch.max(torch.norm(net_contact_forces[:, :, self._hip_contact_sensor_ids], dim=-1), dim=1)[0] > 1.0
-        two_legs_died_check = torch.any(hips_contact & legs_status.bool(), dim=1)
+        legs_down = ~legs_status.bool()
+        num_legs_down = legs_down.sum(dim=1)
 
         # Check contacts for base and all hips (used when less than two legs are down)
+        hips_contact = torch.max(torch.norm(net_contact_forces[:, :, self._hip_contact_sensor_ids], dim=-1), dim=1)[0] > 1.0
         died_check_base = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._base_contact_sensor_id], dim=-1), dim=1)[0] > 1.0,dim=1,)
         died_check_hips = torch.any(hips_contact, dim=1)
         died_check = torch.logical_or(died_check_base, died_check_hips)
+
+        # two_legs died check (only consider the hips of the working legs; ignore failed-leg hips)
+        # (used when two legs are down, e.g. rl_rr -> front hips, fl_rl -> right hips, fl_rr -> FR/RL hips)
+        # The base is ignored only for rl_rr (walking on the front legs)
+        rl_rr_failed = legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2)
+        two_legs_died_check = torch.any(hips_contact & legs_status.bool(), dim=1)
+        two_legs_died_check = two_legs_died_check | (died_check_base & ~rl_rr_failed)
 
         is_two_legs_failed = num_legs_down >= 2
 
