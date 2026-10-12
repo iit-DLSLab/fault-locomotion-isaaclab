@@ -100,6 +100,8 @@ FAILURE_MODE_LABELS = {
     1: "fl_down",
     2: "rl_down",
     3: "rl_rr_down",
+    4: "lateral_down",
+    5: "diagonal_down",
 }
 
 

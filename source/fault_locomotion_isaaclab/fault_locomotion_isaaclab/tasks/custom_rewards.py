@@ -17,7 +17,8 @@ def _get_feet_terrain_heights(self) -> torch.Tensor:
 def track_height_exp(self):
     legs_status = (self._per_leg_joint_status.all(dim=2)).float()
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
-    num_legs_down = (~legs_status.bool()).sum(dim=1)
+    legs_down = ~legs_status.bool()
+    num_legs_down = legs_down.sum(dim=1)
 
     height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -27,7 +28,8 @@ def track_height_exp(self):
     height_error = torch.square(self.cfg.desired_base_height + mean_height_ray - self._robot.data.root_state_w[:, 2])
     height_error_mapped = torch.exp(-height_error / 0.01)
 
-    height_error_mask = num_legs_down < 2
+    # Not for rl_rr_all_failed (walking on the front legs), there two_legs_track_height_exp is used
+    height_error_mask = (num_legs_down <= 2) & ~(legs_down[:, 2] & legs_down[:, 3])
     height_error_mapped = height_error_mapped * height_error_mask
 
     return height_error_mapped
@@ -107,10 +109,15 @@ def track_orientation_l2(self):
         torch.square(terrain_pitch + 0.05 - root_pitch_w),
         base_orientation_pitch,
     )
-    base_orientation_pitch = torch.where(num_legs_down == 2, base_orientation_pitch * 0.0, base_orientation_pitch)
+    # With two legs down the pitch is free, apart from the lateral case (fl_rl, fr_rr) where instead the robot has to roll
+    lateral_legs_down = ((legs_down[:, 0] & legs_down[:, 2]) | (legs_down[:, 1] & legs_down[:, 3])) & (num_legs_down == 2)
+    base_orientation_pitch = torch.where(
+        (num_legs_down == 2) & ~lateral_legs_down, base_orientation_pitch * 0.0, base_orientation_pitch
+    )
 
     base_orientation_roll = torch.square(terrain_roll - root_roll_w)
-    base_orientation = base_orientation_pitch + base_orientation_roll
+    base_orientation_roll = torch.where(lateral_legs_down, base_orientation_roll * 0.0, base_orientation_roll)
+    base_orientation =base_orientation_pitch + base_orientation_roll
 
     return base_orientation
 
@@ -137,7 +144,8 @@ def track_ang_vel_z_exp(self):
 def undesired_contacts(self):
     legs_status = (self._per_leg_joint_status.all(dim=2)).float()
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
-    num_legs_down = (~legs_status.bool()).sum(dim=1)
+    legs_down = ~legs_status.bool()
+    num_legs_down = legs_down.sum(dim=1)
 
     net_contact_forces = self._contact_sensor.data.net_forces_w_history
     is_contact = torch.max(torch.norm(net_contact_forces[:, :, self._undesired_contact_body_ids], dim=-1), dim=1)[
@@ -145,7 +153,8 @@ def undesired_contacts(self):
     ] > 1.0
 
     legs_mask_for_undersider_contacts = torch.cat([legs_status, legs_status, legs_status], dim=1)
-    trunk_mask = num_legs_down < 2
+    # Base contacts are ignored only for rl_rr_all_failed (walking on the front legs)
+    trunk_mask = (num_legs_down <= 2) & ~(legs_down[:, 2] & legs_down[:, 3])
 
     is_contact[:, 0] = is_contact[:, 0] & trunk_mask
     is_contact[:, 1:] = is_contact[:, 1:] & legs_mask_for_undersider_contacts.bool()
@@ -623,7 +632,8 @@ def stance_contact_suggestion(self):
 def two_legs_track_height_exp(self):
     legs_status = (self._per_leg_joint_status.all(dim=2)).float()
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
-    num_legs_down = (~legs_status.bool()).sum(dim=1)
+    legs_down = ~legs_status.bool()
+    num_legs_down = legs_down.sum(dim=1)
 
     height_data_scanner = self._pose_height_scanner.data.ray_hits_w[..., 2]
     height_data_scanner = torch.nan_to_num(height_data_scanner, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -646,7 +656,8 @@ def two_legs_track_height_exp(self):
     front_hip_height_error += torch.square(desired_front + mean_height_ray_front - hip_z_world[:, 1])
     two_legs_front_hip_height_error_mapped = torch.exp(-front_hip_height_error / 0.01)
 
-    front_hip_height_mask = num_legs_down >= 2
+    # Only for rl_rr_all_failed (walking on the front legs)
+    front_hip_height_mask = legs_down[:, 2] & legs_down[:, 3] & (num_legs_down == 2)
     two_legs_front_hip_height_error_mapped = two_legs_front_hip_height_error_mapped * front_hip_height_mask.float()
 
     return two_legs_front_hip_height_error_mapped

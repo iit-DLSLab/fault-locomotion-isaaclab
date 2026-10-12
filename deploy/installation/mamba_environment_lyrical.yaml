@@ -6,7 +6,7 @@ variables:
 channels:
 - conda-forge
 - nvidia
-- robostack-lyrical
+- https://prefix.dev/robostack-lyrical
 dependencies:
 - pip
 - python
@@ -14,6 +14,7 @@ dependencies:
 - cuda-nvcc 
 - ros-lyrical-desktop
 - ros-lyrical-rmw-cyclonedds-cpp
+- ros-lyrical-rosidl-generator-dds-idl
 - ros-lyrical-plotjuggler-ros
 - compilers 
 - cmake 
