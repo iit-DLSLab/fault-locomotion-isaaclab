@@ -46,13 +46,13 @@ class MoECfg:
 # Mixture of Expert Stuff
 moe_cfg = MoECfg(
     who = "actor+critic",
-    num_experts = 6,
+    num_experts = 4,
     gate_hidden_dims = [128],
     top_k = None,
     use_gate_loss = False,
     use_load_balance_loss = False,
     use_explicit_expert = True,  
     use_shared_layers = "backbone", 
-    expert_output_dims = [12, 9, 9, 6, 6, 6], # all fine, front, rear, rl_rr, lateral, diagonal
+    expert_output_dims = [12, 9, 9, 6], # all fine, front, rear, rl_rr (as moe_blind)
     use_pcgrad = True
 )

@@ -661,3 +661,27 @@ def two_legs_track_height_exp(self):
     two_legs_front_hip_height_error_mapped = two_legs_front_hip_height_error_mapped * front_hip_height_mask.float()
 
     return two_legs_front_hip_height_error_mapped
+
+
+def in_transition_window(self) -> torch.Tensor:
+    window_steps = int(self.cfg.transition_window_s / self.step_dt)
+    return self._steps_since_switch < window_steps
+
+
+def transition_stability(self):
+    """Right after a mode switch: roll/pitch rate and vertical speed, so the
+    hand-over between experts (and the gain ramp) doesn't shake or drop the trunk."""
+    ang_vel_xy = torch.sum(torch.square(self._robot.data.root_ang_vel_b[:, :2]), dim=1)
+    lin_vel_z = torch.square(self._robot.data.root_lin_vel_b[:, 2])
+    return (ang_vel_xy + 4.0 * lin_vel_z) * in_transition_window(self).float()
+
+
+def trunk_impact(self):
+    """Hits of the trunk/hips/thighs/calves above the robot's weight, in every
+    mode: the two-legs mode may rest the trunk on the ground, but has to sit
+    down on it, not drop."""
+    net_contact_forces = self._contact_sensor.data.net_forces_w_history
+    force = torch.max(torch.norm(net_contact_forces[:, :, self._undesired_contact_body_ids], dim=-1), dim=1)[0]
+    weight = (self._body_masses.sum(dim=1) * 9.81).unsqueeze(1).to(force.device)
+    excess = torch.clamp(force / weight - 1.0, min=0.0)
+    return torch.sum(torch.square(excess), dim=1)

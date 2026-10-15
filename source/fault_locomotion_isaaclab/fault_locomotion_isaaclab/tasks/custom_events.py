@@ -677,12 +677,26 @@ def randomize_pace_actuator_delay(
 
 def _sample_random_commands(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
     num_commands = self.num_envs if env_ids is None else env_ids.shape[0]
-    commands = torch.empty(num_commands, self._commands.shape[1], device=self.device, dtype=self._commands.dtype)
-    commands.uniform_(-1.0, 1.0)
-    commands[:, 0] *= 0.3
-    commands[:, 1] *= 0.25
-    commands[:, 2] *= 0.3
-    return commands
+    # per-mode ranges: all_fine gets the (curriculum-widened) fast range
+    lo, hi = _command_limits(self, env_ids)
+    u = torch.rand(num_commands, 3, device=self.device, dtype=self._commands.dtype)
+    return lo + u * (hi - lo)
+
+
+def _command_limits(self, env_ids: torch.Tensor | None = None):
+    """Per-env (low, high) command bounds, shape [n, 3], for the env's current mode."""
+    failure_type = self._failure_type if env_ids is None else self._failure_type[env_ids]
+    vx_min, vx_max, vy, yaw = self.cfg.fault_command_range
+    fault = torch.tensor([[vx_min, -vy, -yaw], [vx_max, vy, yaw]], device=self.device)
+    vx_min, vx_max, vy, yaw = self.cfg.all_fine_command_range
+    fast = torch.tensor([[vx_min, -vy, -yaw], [vx_max, vy, yaw]], device=self.device)
+    iterations = self.common_step_counter / 24.0
+    progress = min(1.0, iterations / max(1.0, float(self.cfg.command_curriculum_iterations)))
+    all_fine = fault + (fast - fault) * progress
+    is_fine = (failure_type == 0).unsqueeze(1)
+    lo = torch.where(is_fine, all_fine[0], fault[0])
+    hi = torch.where(is_fine, all_fine[1], fault[1])
+    return lo, hi
 
 
 def _get_new_random_commands(self, env_ids: torch.Tensor | None = None):
@@ -739,3 +753,83 @@ def _get_new_random_commands(self, env_ids: torch.Tensor | None = None):
         and self.num_envs > self.num_zero_velocity_envs
     ):
         self._commands[self.zero_velocity_envs, :3] *= 0.0
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Mode switching while walking/standing, with the failed joints' gains ramping instead of dropping
+
+def _sample_switch_steps(self, n: int) -> torch.Tensor:
+    lo, hi = self.cfg.mode_switch_interval_s
+    return (torch.empty(n, device=self.device).uniform_(lo, hi) / self.step_dt).long()
+
+
+def init_mode_switching(self):
+    # gain scale per joint, ramped toward _per_leg_joint_status
+    self._kp_scale = torch.ones(self.num_envs, 4, 3, device=self.device)
+    self._kd_scale = torch.ones(self.num_envs, 4, 3, device=self.device)
+    self._gain_ramp_s = torch.ones(self.num_envs, 1, 1, device=self.device)
+    big = 10**6
+    self._steps_to_switch = torch.full((self.num_envs,), big, dtype=torch.long, device=self.device)
+    self._steps_since_switch = torch.full((self.num_envs,), big, dtype=torch.long, device=self.device)
+    self._previous_failure_type = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
+
+def reset_mode_switching(self, env_ids: torch.Tensor):
+    # a reset spawns the robot already in its mode: no ramp
+    self._kp_scale[env_ids] = self._per_leg_joint_status[env_ids]
+    self._kd_scale[env_ids] = self._per_leg_joint_status[env_ids]
+    lo, hi = self.cfg.gain_ramp_s
+    self._gain_ramp_s[env_ids] = torch.empty(len(env_ids), 1, 1, device=self.device).uniform_(lo, hi)
+    self._steps_since_switch[env_ids] = 10**6
+    self._previous_failure_type[env_ids] = self._failure_type[env_ids]
+    if self.cfg.use_mode_switching:
+        self._steps_to_switch[env_ids] = _sample_switch_steps(self, len(env_ids))
+
+
+def mode_switch_event(self):
+    """Called once per policy step: switch the envs whose timer ran out to
+    another enabled mode. The joint status (and so the observation and the
+    MoE expert) changes at once, the gains follow with the ramp."""
+    self._steps_since_switch += 1
+    if not self.cfg.use_mode_switching:
+        return
+    self._steps_to_switch -= 1
+    env_ids = torch.nonzero(self._steps_to_switch <= 0, as_tuple=False).squeeze(-1)
+    if env_ids.numel() == 0:
+        return
+    weights = torch.tensor(self.cfg.failure_type_activation, dtype=torch.float, device=self.device)
+    weights = weights.unsqueeze(0).repeat(len(env_ids), 1)
+    weights[torch.arange(len(env_ids), device=self.device), self._failure_type[env_ids]] = 0.0  # a different mode
+    new_type = torch.multinomial(weights, num_samples=1).squeeze(-1)
+
+    self._previous_failure_type[env_ids] = self._failure_type[env_ids]
+    self._failure_type[env_ids] = new_type
+    # new joint status; the gains it zeroes are overwritten by apply_gain_ramp before the next physics step
+    _failures_event_setter(self, env_ids, self._failure_type)
+    self._steps_since_switch[env_ids] = 0
+    self._steps_to_switch[env_ids] = _sample_switch_steps(self, len(env_ids))
+
+    # entering a fault mode while going fast: clamp to that mode's range, as deploy does
+    lo, hi = _command_limits(self, env_ids)
+    self._commands[env_ids, :3] = torch.maximum(torch.minimum(self._commands[env_ids, :3], hi), lo)
+
+
+def apply_gain_ramp(self):
+    """Move each joint's gain scale toward its status and write the gains.
+    Failing: Kp over gain_ramp_s, Kd over twice that. Recovering: Kd over half
+    of it, Kp over gain_ramp_s."""
+    target = self._per_leg_joint_status
+    dt = self.step_dt
+    kp_step = dt / self._gain_ramp_s
+    falling = target < self._kd_scale
+    kd_step = torch.where(falling, dt / (2.0 * self._gain_ramp_s), dt / (0.5 * self._gain_ramp_s))
+    self._kp_scale += torch.clamp(target - self._kp_scale, -kp_step, kp_step)
+    self._kd_scale += torch.clamp(target - self._kd_scale, -kd_step, kd_step)
+
+    asset: Articulation = self.scene["robot"]
+    for j, joint_type in enumerate(("hip", "thigh", "calf")):
+        actuator = asset.actuators[joint_type]
+        for leg_i, leg in enumerate(("FL", "FR", "RL", "RR")):
+            idx = self._actuator_leg_ids[joint_type][leg]
+            actuator.stiffness[:, idx] = self._healthy_actuator_stiffness[joint_type][:, idx] * self._kp_scale[:, leg_i, j]
+            actuator.damping[:, idx] = self._healthy_actuator_damping[joint_type][:, idx] * self._kd_scale[:, leg_i, j]

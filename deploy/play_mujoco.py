@@ -21,6 +21,7 @@ from heightmap import HeightMap
 # Locomotion Policy imports
 from deploy import config
 from locomotion_policy_wrapper import LocomotionPolicyWrapper
+from gain_ramp import GainRamp, clamp_commands
 
 
 class PlayMujoco:
@@ -45,6 +46,9 @@ class PlayMujoco:
         self.RENDER_FREQ = 30.0
 
         self.locomotion_policy = LocomotionPolicyWrapper(mjModel=self.mjModel)
+        self.gain_ramp = GainRamp.from_training_env(config.training_env, 1.0 / self.locomotion_policy.RL_FREQ)
+        self.kp_scale = np.ones(12)
+        self.kd_scale = np.ones(12)
 
         if self.locomotion_policy.use_vision:
             resolution_heightmap = config.training_env["perceptive_height_scanner"]["pattern_cfg"]["resolution"]
@@ -162,6 +166,15 @@ class PlayMujoco:
             else:
                 pass
 
+            if step_num % round(1 / (self.locomotion_policy.RL_FREQ * self.simulation_dt)) == 0:
+                # as on the robot: per-mode speed limits, gains ramping at the RL rate
+                self.ref_base_ang_yaw_dot = clamp_commands(
+                    config.training_env, self.locomotion_policy._per_leg_joint_status,
+                    self.ref_base_lin_vel_H, self.ref_base_ang_yaw_dot,
+                )
+                kp_scale, kd_scale = self.gain_ramp.step(self.locomotion_policy._per_leg_joint_status)
+                self.kp_scale, self.kd_scale = kp_scale.reshape(12).copy(), kd_scale.reshape(12).copy()
+
             if self.console.isRLActivated and step_num % round(1 / (self.locomotion_policy.RL_FREQ * self.simulation_dt)) == 0:
                 self.desired_joint_pos_leg = self.locomotion_policy.compute_control(
                     base_pos=base_pos,
@@ -194,10 +207,9 @@ class PlayMujoco:
                 self.legs_joints_position + upper,
             )
 
-            tau_leg = self.Kp_legs * (self.desired_joint_pos_leg - self.legs_joints_position) - self.Kd_legs * self.legs_joints_velocity
-
-            # Apply leg failures by zeroing out the corresponding torques ------------------------------------------------------
-            tau_leg = tau_leg * self.locomotion_policy._per_leg_joint_status.flatten()
+            # Leg failures: the gains of the failed joints ramp to zero (deploy/gain_ramp.py) ------------------------------
+            tau_leg = (self.Kp_legs * self.kp_scale * (self.desired_joint_pos_leg - self.legs_joints_position)
+                       - self.Kd_legs * self.kd_scale * self.legs_joints_velocity)
 
             self.mjData.ctrl[0:12] = tau_leg
             mujoco.mj_step(self.mjModel, self.mjData)

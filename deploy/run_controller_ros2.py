@@ -58,6 +58,7 @@ file_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(file_path + "/mujoco_utils/")
 sys.path.append(file_path + "/../")
 import mujoco_utils
+from gain_ramp import GainRamp, clamp_commands, joystick_scale
 from heightmap import HeightMap
 
 
@@ -142,6 +143,10 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         self.ref_base_lin_vel_H = np.zeros(3)
         self.ref_base_ang_yaw_dot = 0.0
 
+        # Failed joints' gains ramp instead of dropping (deploy/gain_ramp.py)
+        self.gain_ramp = GainRamp.from_training_env(config.training_env, 1.0 / RL_FREQ)
+        self.joy_scale = joystick_scale(config.training_env)
+
         
         # Initialization of variables used in the main control loop --------------------------------
         self.locomotion_policy = LocomotionPolicyWrapper(mjModel=self.mjModel)
@@ -187,9 +192,10 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         """
 
         filter_joystick = 0.7
-        self.ref_base_lin_vel_H[0] = self.ref_base_lin_vel_H[0]*filter_joystick + (msg.axes[1]/3.5)*(1-filter_joystick)  # Forward/Backward
-        self.ref_base_lin_vel_H[1] = self.ref_base_lin_vel_H[1]*filter_joystick + (msg.axes[0]/3.5)*(1-filter_joystick)  # Left/Right
-        self.ref_base_ang_yaw_dot = self.ref_base_ang_yaw_dot*filter_joystick + (msg.axes[3]/2.)*(1-filter_joystick)  # Yaw
+        vx_s, vy_s, yaw_s = self.joy_scale
+        self.ref_base_lin_vel_H[0] = self.ref_base_lin_vel_H[0]*filter_joystick + (msg.axes[1]*vx_s)*(1-filter_joystick)  # Forward/Backward
+        self.ref_base_lin_vel_H[1] = self.ref_base_lin_vel_H[1]*filter_joystick + (msg.axes[0]*vy_s)*(1-filter_joystick)  # Left/Right
+        self.ref_base_ang_yaw_dot = self.ref_base_ang_yaw_dot*filter_joystick + (msg.axes[3]*yaw_s)*(1-filter_joystick)  # Yaw
 
         self.last_joy_time = time.time()
 
@@ -324,7 +330,12 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
             
 
         locomotion_policy = self.locomotion_policy
-        
+
+        # Speed limits per mode, as trained (fault modes are slower)
+        self.ref_base_ang_yaw_dot = clamp_commands(
+            config.training_env, locomotion_policy._per_leg_joint_status, self.ref_base_lin_vel_H, self.ref_base_ang_yaw_dot
+        )
+
         qpos, qvel = self.mjData.qpos, self.mjData.qvel
         base_lin_vel = mujoco_utils.base_lin_vel(self.mjData, frame='base')
         base_ang_vel = mujoco_utils.base_ang_vel(self.mjData, frame='base')
@@ -398,25 +409,11 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         control_signal_msg.kd = (np.ones(12) * Kd).tolist()
 
 
-        if np.all(locomotion_policy._per_leg_joint_status[2, :] == 0.0) and np.all(locomotion_policy._per_leg_joint_status[3, :] == 0.0): #rear legs failure
-            control_signal_msg.kp[6:] = array('d', [0.0] * 6)
-            control_signal_msg.kd[6:] = array('d', [0.0] * 6)
-        
-        elif np.all(locomotion_policy._per_leg_joint_status[0, :] == 0.0): #FL failure for thigh and calg
-            control_signal_msg.kp[0:3] = array('d', [0.0] * 3)
-            control_signal_msg.kd[0:3] = array('d', [0.0] * 3)
-        
-        elif np.all(locomotion_policy._per_leg_joint_status[1] == 0.0): #FR failure for thigh and calg
-            control_signal_msg.kp[3:6] = array('d', [0.0] * 3)
-            control_signal_msg.kd[3:6] = array('d', [0.0] * 3)
-        
-        elif np.all(locomotion_policy._per_leg_joint_status[2, :] == 0.0): #RL failure for thigh and calg
-            control_signal_msg.kp[6:9] = array('d', [0.0] * 3)
-            control_signal_msg.kd[6:9] = array('d', [0.0] * 3)
-        
-        elif np.all(locomotion_policy._per_leg_joint_status[3, :] == 0.0): #RR failure for thigh and calg
-            control_signal_msg.kp[9:12] = array('d', [0.0] * 3)
-            control_signal_msg.kd[9:12] = array('d', [0.0] * 3)
+        # Failed joints: gains ramp toward 0 (and back when the leg recovers).
+        # The status is [leg, joint], the message per leg (FL hip/thigh/calf, FR..., RL..., RR...)
+        kp_scale, kd_scale = self.gain_ramp.step(locomotion_policy._per_leg_joint_status)
+        control_signal_msg.kp = (np.array(control_signal_msg.kp) * kp_scale.reshape(12)).tolist()
+        control_signal_msg.kd = (np.array(control_signal_msg.kd) * kd_scale.reshape(12)).tolist()
 
 
         self.publisher_control_signal.publish(control_signal_msg)

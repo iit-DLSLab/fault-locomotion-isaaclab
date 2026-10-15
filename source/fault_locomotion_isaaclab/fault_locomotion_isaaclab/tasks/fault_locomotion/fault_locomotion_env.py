@@ -193,6 +193,9 @@ class FaultLocomotionEnv(DirectRLEnv):
                 "stance_contact_suggestion",
 
                 "two_legs_track_height_exp",
+
+                "transition_stability",
+                "trunk_impact",
             ]
         }
         # Get specific body indices
@@ -232,6 +235,9 @@ class FaultLocomotionEnv(DirectRLEnv):
             self._nominal_actuator_damping[joint_type] = actuator.damping.clone()
             self._healthy_actuator_stiffness[joint_type] = actuator.stiffness.clone()
             self._healthy_actuator_damping[joint_type] = actuator.damping.clone()
+
+        # Mode switching while walking/standing + gain ramp of the failed joints
+        custom_events.init_mode_switching(self)
 
 
     def _setup_scene(self):
@@ -304,6 +310,9 @@ class FaultLocomotionEnv(DirectRLEnv):
 
 
     def _pre_physics_step(self, actions: torch.Tensor):
+        # failed/recovering joints: gains ramp toward the joint status
+        custom_events.apply_gain_ramp(self)
+
         self._previous_previous_actions = self._previous_actions.clone()
         self._previous_actions = self._actions.clone()
 
@@ -363,6 +372,9 @@ class FaultLocomotionEnv(DirectRLEnv):
         
         # Sample new commands if needed
         custom_events._get_new_random_commands(self)
+
+        # Switch the failure mode of some envs (the new status is in this observation)
+        custom_events.mode_switch_event(self)
 
 
         # Observation --------------------------------------------------------------------------------------
@@ -518,6 +530,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         feet_to_hip_distance_l2 = custom_rewards.feet_to_hip_distance_l2(self)
         com_support_polygon = custom_rewards.com_support_polygon(self)
         feet_vertical_surface_contacts = custom_rewards.feet_vertical_surface_contacts(self)
+        transition_stability = custom_rewards.transition_stability(self)
+        trunk_impact = custom_rewards.trunk_impact(self)
 
         rewards = {
             "track_height_exp": track_height_exp * self.cfg.height_reward_scale * self.step_dt,
@@ -554,6 +568,10 @@ class FaultLocomotionEnv(DirectRLEnv):
 
             #two_legs rewards
             "two_legs_track_height_exp": two_legs_track_height_exp * self.cfg.two_legs_front_hip_height_reward_scale * self.step_dt,
+
+            # mode switches
+            "transition_stability": transition_stability * self.cfg.transition_stability_reward_scale * self.step_dt,
+            "trunk_impact": trunk_impact * self.cfg.trunk_impact_reward_scale * self.step_dt,
        }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
@@ -593,7 +611,16 @@ class FaultLocomotionEnv(DirectRLEnv):
         is_two_legs_failed = num_legs_down >= 2
 
         died = torch.where(is_two_legs_failed, two_legs_died_check, died_check)
-        
+
+        # Just left the two-legs mode: the robot may still sit on its trunk and
+        # rear hips while it stands up, keep the two-legs rule (front hips only)
+        just_left_rl_rr = (self._previous_failure_type == 1) & (self._failure_type != 1) & custom_rewards.in_transition_window(self)
+        front_hips_contact = torch.any(hips_contact[:, :2], dim=1)
+        died = torch.where(just_left_rl_rr, front_hips_contact, died)
+
+        # Tipped over, whatever the mode
+        died = died | (self._robot.data.projected_gravity_b[:, 2] > self.cfg.max_tilt_projected_gravity_z)
+
         return died, time_out
 
 
@@ -627,7 +654,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             # all fine
             all_fine_ids = env_ids[self._failure_type[env_ids] == 0]
             if all_fine_ids.numel() > 0:
-                random_level_all_fine = torch.randint_like(self._terrain.terrain_levels[all_fine_ids], self._terrain.max_terrain_level)
+                random_level_all_fine = torch.randint_like(self._terrain.terrain_levels[all_fine_ids], int(self._terrain.max_terrain_level//4.0))
                 self._terrain.terrain_levels[all_fine_ids] = random_level_all_fine
                 self._terrain.env_origins[all_fine_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[all_fine_ids], self._terrain.terrain_types[all_fine_ids]]
 
@@ -636,14 +663,14 @@ class FaultLocomotionEnv(DirectRLEnv):
             two_legs_failed_mask = torch.isin(self._failure_type[env_ids], two_legs_failure_types)
             two_legs_failed_ids = env_ids[two_legs_failed_mask]
             if two_legs_failed_ids.numel() > 0:
-                random_level_two_legs_failed = torch.randint_like(self._terrain.terrain_levels[two_legs_failed_ids], int(self._terrain.max_terrain_level//3.5))
+                random_level_two_legs_failed = torch.randint_like(self._terrain.terrain_levels[two_legs_failed_ids], int(self._terrain.max_terrain_level//4.0))
                 self._terrain.terrain_levels[two_legs_failed_ids] = random_level_two_legs_failed
                 self._terrain.env_origins[two_legs_failed_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[two_legs_failed_ids], self._terrain.terrain_types[two_legs_failed_ids]]
 
             # single leg failed (fl, fr, rl, rr)
             single_leg_failed_ids = env_ids[(self._failure_type[env_ids] != 0) & ~two_legs_failed_mask]
             if single_leg_failed_ids.numel() > 0:
-                random_level_single_leg_failed = torch.randint_like(self._terrain.terrain_levels[single_leg_failed_ids], int(self._terrain.max_terrain_level//2.0))
+                random_level_single_leg_failed = torch.randint_like(self._terrain.terrain_levels[single_leg_failed_ids], int(self._terrain.max_terrain_level//4.0))
                 self._terrain.terrain_levels[single_leg_failed_ids] = random_level_single_leg_failed
                 self._terrain.env_origins[single_leg_failed_ids] = self._terrain.terrain_origins[self._terrain.terrain_levels[single_leg_failed_ids], self._terrain.terrain_types[single_leg_failed_ids]]
             
@@ -730,3 +757,4 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         # Set the event failure
         custom_events._failures_event_setter(self, env_ids, self._failure_type)
+        custom_events.reset_mode_switching(self, env_ids)
