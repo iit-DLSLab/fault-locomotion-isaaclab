@@ -186,7 +186,7 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     else:
         history_length = 1
 
-    use_varying_action_space = False # if used MoE with varying expert_output_dims, check moe_cfg.py
+    use_varying_action_space = True # as moe_blind; if used MoE with varying expert_output_dims, check moe_cfg.py
     observation_space += 1 # expert activation
 
     use_imu = False
@@ -375,7 +375,8 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     desired_feet_height = 0.05
 
     # Type of failures, put 1 to the one that should happen, and 0 to the rest
-    all_fine = 1
+    # weights, not just on/off: the value is the relative sampling probability
+    all_fine = 2
     rl_rr_all_failed = 1
     fl_thigh_calf_failed = 0
     fr_thigh_calf_failed = 0
@@ -402,9 +403,9 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
     rl_hip_calf_failed = 0
     rr_hip_calf_failed = 0
     fl_all_failed = 1
-    fr_all_failed = 0
+    fr_all_failed = 1
     rl_all_failed = 1
-    rr_all_failed = 0
+    rr_all_failed = 1
     # two legs failures: lateral (fl_rl, fr_rr) and diagonal (fl_rr, fr_rl)
     fl_rl_all_failed = 0
     fr_rr_all_failed = 0
@@ -422,6 +423,27 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
                         fl_all_failed, fr_all_failed, rl_all_failed, rr_all_failed,
                         fl_rl_all_failed, fr_rr_all_failed, fl_rr_all_failed, fr_rl_all_failed
                         ]
+
+    # Switching the failure mode while walking or standing, like the robot's
+    # setFailureMode does: each env switches every mode_switch_interval_s
+    # seconds (uniform), to another enabled mode (weights above)
+    use_mode_switching = True
+    mode_switch_interval_s = (3.0, 12.0)
+    # A failed joint doesn't go limp at once: Kp ramps to 0 in gain_ramp_s
+    # seconds (per env, uniform), Kd in twice that, so the leg settles damped.
+    # Recovering, Kd comes back in half the time and Kp in gain_ramp_s.
+    # deploy/gain_ramp.py ramps the same way (mean of gain_ramp_s, from params/env.yaml).
+    gain_ramp_s = (0.6, 1.0)
+    # After a switch: extra stability terms, and for the first seconds after
+    # leaving the two-legs mode the robot may still sit on its trunk
+    transition_window_s = 2.0
+
+    # Commands (vx_min, vx_max, vy, yaw): fault modes stay slow, the all_fine
+    # range widens from the fault one to the fast one over
+    # command_curriculum_iterations (policy iterations of 24 steps)
+    fault_command_range = (-0.3, 0.3, 0.25, 0.3)
+    all_fine_command_range = (-0.6, 1.0, 0.5, 1.0)
+    command_curriculum_iterations = 1500
 
     desired_joints_order = ['FL_hip_joint', 'FR_hip_joint', 'RL_hip_joint', 'RR_hip_joint',
                            'FL_thigh_joint', 'FR_thigh_joint', 'RL_thigh_joint', 'RR_thigh_joint',  
@@ -487,6 +509,13 @@ class Go2FlatEnvCfg(DirectRLEnvCfg):
 
     # Two legs fault specifi command
     two_legs_front_hip_height_reward_scale = 1.0
+
+    # Mode switches: roll/pitch rate and vertical speed inside the transition
+    # window, and any trunk/leg (non-foot) impact above the robot's weight
+    transition_stability_reward_scale = -1.0
+    trunk_impact_reward_scale = -0.5
+    # Tipped over (base z-axis more than ~78 deg from vertical) ends the episode
+    max_tilt_projected_gravity_z = -0.2
 
 
 import isaaclab.terrains as terrain_gen
