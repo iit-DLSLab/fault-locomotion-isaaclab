@@ -711,36 +711,52 @@ def _get_new_random_commands(self, env_ids: torch.Tensor | None = None):
     commands_resample_2 = _sample_random_commands(self)
     self._commands[:, :3] = self._commands[:, :3] * ~resample_commands_time_2.unsqueeze(1).expand(-1, 3) + commands_resample_2 * resample_commands_time_2.unsqueeze(1).expand(-1, 3)
 
-    """
-    # Changing failure event during walking
-    failure_resample_time = self.episode_length_buf == self.max_episode_length - 100
-
-    if(torch.any(failure_resample_time)):
-        idx_switching_failure_moment = torch.where(failure_resample_time)[0]
-
-        failure_type_activation_torch = torch.tensor(self.cfg.failure_type_activation, dtype=torch.float, device=self.device)
-        failure_type_activation_torch_prob = failure_type_activation_torch/failure_type_activation_torch.sum()
-
-        temp_failure_type = self._failure_type.clone()
-
-        # We go from all_fine to the other event case
-        mask = self._failure_type[idx_switching_failure_moment] == 0
-        if torch.any(mask):
-            idx_compatible_switcher = idx_switching_failure_moment[mask]
-            temp_failure_type[idx_compatible_switcher] = torch.multinomial(failure_type_activation_torch_prob, num_samples=len(idx_compatible_switcher), replacement=True)
-            _failures_event_setter(self, idx_compatible_switcher, temp_failure_type)
-
-        # We go from all the other event case to all fine
-        mask2 = self._failure_type[idx_switching_failure_moment] > 0
-        if torch.any(mask2):
-            idx_compatible_switcher2 = idx_switching_failure_moment[mask2]
-            temp_failure_type[idx_compatible_switcher2] = torch.multinomial(failure_type_activation_torch_prob, num_samples=len(idx_compatible_switcher2), replacement=True)
-            _failures_event_setter(self, idx_compatible_switcher2, temp_failure_type)
-    """
-
     # Took some envs, and put to zero the vel
     if (hasattr(self, "num_zero_velocity_envs")
         and hasattr(self, "zero_velocity_envs")
         and self.num_envs > self.num_zero_velocity_envs
     ):
         self._commands[self.zero_velocity_envs, :3] *= 0.0
+
+
+def _failure_onset_step(self) -> int:
+    """Episode step at which _get_new_random_failures injects a failure in the healthy envs."""
+    return self.max_episode_length - 100
+
+
+def _steps_since_failure_onset(self) -> torch.Tensor:
+    """Steps since the failure injected while walking (0 at the injection), -1 for the envs without one."""
+    injected = (self._failure_type == 0) & ~self._per_leg_joint_status.flatten(1).bool().all(dim=1)
+    steps = self.episode_length_buf - _failure_onset_step(self)
+    return torch.where(injected & (steps >= 0), steps, torch.full_like(steps, -1))
+
+
+def _get_new_random_failures(self):
+    """Inject a failure while walking, at a fixed moment of the episode (after the commands restart).
+
+    Only all fine -> failure: the healthy envs get one of the active failures in cfg.failure_type_activation
+    (all fine excluded), the failed envs keep their failure (a broken joint does not recover).
+
+    self._failure_type is not modified: it is the failure assigned to the env, restored at every reset
+    and used by the terrain curriculum. Updating it would make the failure distribution drift away from
+    cfg.failure_type_activation over the episodes.
+    """
+    failure_resample_time = self.episode_length_buf == _failure_onset_step(self)
+    if not torch.any(failure_resample_time):
+        return
+
+    failure_type_activation = self.cfg.failure_type_activation
+    if sum(failure_type_activation[1:]) <= 0:
+        return
+
+    healthy_ids = torch.nonzero(failure_resample_time & (self._failure_type == 0), as_tuple=False).squeeze(-1)
+    if healthy_ids.numel() == 0:
+        return
+
+    failure_prob = torch.tensor(failure_type_activation, dtype=torch.float, device=self.device)
+    failure_prob[0] = 0.0
+    new_failure_type = self._failure_type.clone()
+    new_failure_type[healthy_ids] = torch.multinomial(
+        failure_prob / failure_prob.sum(), num_samples=healthy_ids.numel(), replacement=True
+    )
+    _failures_event_setter(self, healthy_ids, new_failure_type)

@@ -36,7 +36,7 @@ except Exception:
 from .go2_env_cfg import Go2FlatEnvCfg, Go2RoughVisionEnvCfg, Go2RoughBlindEnvCfg
 from .pegasus_env_cfg import PegasusFlatEnvCfg, PegasusRoughVisionEnvCfg, PegasusRoughBlindEnvCfg
 
-from fault_locomotion_isaaclab.tasks.supervised_learning_networks import FrozenRandomMlpEncoder, create_supervised_network
+from fault_locomotion_isaaclab.tasks.supervised_learning_networks import create_supervised_network
 
 class FaultLocomotionEnv(DirectRLEnv):
 
@@ -96,6 +96,9 @@ class FaultLocomotionEnv(DirectRLEnv):
         # legs: [FL, FR, RL, RR]; joints: [hip, thigh, calf]
         # Note: _setup_scene may have already created and populated this via custom_events.
         self._per_leg_joint_status = torch.zeros(self.num_envs, 4, 3, dtype=torch.float, device=self.device)
+        # Joint status as seen by the policy, same shape: the ground truth, or the RMA prediction when it is used.
+        # It drives the explicit expert activation and the action rearrangement, as in deploy
+        self._policy_per_leg_joint_status = torch.ones(self.num_envs, 4, 3, dtype=torch.float, device=self.device)
 
 
         ############################## LOOK HERE ##############################
@@ -112,15 +115,6 @@ class FaultLocomotionEnv(DirectRLEnv):
                 output_activation="identity",
             )
             self._rma_network.to(self.device)
-            
-            if self.cfg.rma_use_latent_space:
-                self._rma_latent_encoder = FrozenRandomMlpEncoder(
-                    cfg.rma_privileged_observation_space,
-                    cfg.rma_output_space,
-                    hidden_features=getattr(cfg, "rma_latent_encoder_hidden_features", 128),
-                    seed=getattr(cfg, "rma_latent_encoder_seed", 0),
-                )
-                self._rma_latent_encoder.to(self.device)
             self._observation_history_rma = torch.zeros(self.num_envs, cfg.rma_history_length, cfg.single_rma_observation_space, device=self.device)
 
         # Learned State Estimator
@@ -348,7 +342,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         #rearrange actions if explicit expert with use_varying_action_space 
         #to change with the number of experts, the action space you choose etc
         if(getattr(self.cfg, "use_varying_action_space", False)):
-            legs_status =  (self._per_leg_joint_status.all(dim=2)).float()
+            # The status seen by the policy when it computed these actions (RMA prediction if used)
+            legs_status =  (self._policy_per_leg_joint_status.all(dim=2)).float()
             legs_status = legs_status.reshape(legs_status.shape[0], -1)
             legs_down = ~legs_status.bool()
             num_legs_down = legs_down.sum(dim=1)
@@ -398,6 +393,9 @@ class FaultLocomotionEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         
+        # Change the failure type if needed, and update the per-leg joint status accordingly
+        custom_events._get_new_random_failures(self)
+
         # Sample new commands if needed
         custom_events._get_new_random_commands(self)
 
@@ -469,10 +467,13 @@ class FaultLocomotionEnv(DirectRLEnv):
 
 
         # If RMA, we add some other predicted obs
+        self._policy_per_leg_joint_status = self._per_leg_joint_status.clone()
         if(self.cfg.use_rma):
             # Predict the RMA observation
             joints_status_rma = custom_observations._get_rma(self)
             obs = torch.cat((obs, joints_status_rma), dim=-1)
+            # The policy believes the predicted joint status, [hips, thighs, calves] -> [legs, joints]
+            self._policy_per_leg_joint_status = joints_status_rma.reshape(self.num_envs, 3, 4).permute(0, 2, 1).clone()
         else:
             # Append joint status, 1 for working 0 for failure (order aligns with cfg.desired_joints_order)
             joints_status = self._per_leg_joint_status.permute(0, 2, 1).reshape(self._per_leg_joint_status.shape[0], -1).clone()
@@ -520,13 +521,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         # 3: RL and RR down
         # 4: lateral legs down (FL-RL or FR-RR)
         # 5: diagonal legs down (FL-RR or FR-RL)
-        """joints_status_per_leg_predicted = (
-            joints_status
-            .reshape(self._per_leg_joint_status.shape[0], self._per_leg_joint_status.shape[2], self._per_leg_joint_status.shape[1])
-            .permute(0, 2, 1)
-            .clone()
-        )"""
-        legs_status =  (self._per_leg_joint_status.all(dim=2)).float()
+        # From the status seen by the policy (RMA prediction if used), as in deploy
+        legs_status =  (self._policy_per_leg_joint_status.all(dim=2)).float()
         legs_status = legs_status.reshape(legs_status.shape[0], -1)
         legs_down = ~legs_status.bool()
         num_legs_down = legs_down.sum(dim=1)

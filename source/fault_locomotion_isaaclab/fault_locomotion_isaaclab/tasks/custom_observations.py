@@ -5,7 +5,7 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
-from . import custom_rewards
+from . import custom_events, custom_rewards
 
 
 def _get_concurrent_state_estimation(self):
@@ -89,9 +89,22 @@ def _get_rma(self):
     if self.cfg.observation_noise_model:
         obs = self._observation_noise_model_rma(obs.clone())
 
+    # Joint status, 1 for working 0 for failure (order aligns with cfg.desired_joints_order)
     outputs_rma = self._per_leg_joint_status.permute(0, 2, 1).reshape(self._per_leg_joint_status.shape[0], -1).clone()
 
-    self._rma_network.dataset.add_sample(obs, outputs_rma)
+    # The first steps after a failure injected while walking are rare in the dataset, but they are the ones where
+    # the RMA has to detect the failure: we always save some of them. The very first steps are skipped, since the
+    # failure is not visible yet in the observations and they would only teach false alarms
+    steps_since_onset = custom_events._steps_since_failure_onset(self)
+    onset_window = getattr(self.cfg, "rma_onset_window", (3, 30))
+    onset_ids = torch.nonzero(
+        (steps_since_onset >= onset_window[0]) & (steps_since_onset <= onset_window[1]), as_tuple=False
+    ).squeeze(-1)
+    self._rma_network.dataset.add_sample(
+        obs, outputs_rma,
+        priority_ids=onset_ids,
+        num_priority_samples=getattr(self.cfg, "rma_onset_samples_per_step", 4),
+    )
 
     # Prediction
     num_episode_from_start = self.common_step_counter / 24. #self.max_episode_length #HACK this should be taken from rsl rl
@@ -99,7 +112,9 @@ def _get_rma(self):
     if num_episode_from_start > self.cfg.rma_ep_saving_start:
         with torch.no_grad():
             prediction_rma = self._rma_network(obs)
+        # The network outputs logits
         obs_rma = (torch.sigmoid(prediction_rma) >= 0.5).to(prediction_rma.dtype)
+        _log_rma_metrics(self, obs_rma, outputs_rma, steps_since_onset)
     else:
         obs_rma = outputs_rma
 
@@ -116,6 +131,31 @@ def _get_rma(self):
         self._rma_network.save_network("rma.pth", self.device)
 
     return obs_rma
+
+
+def _log_rma_metrics(self, predicted_status: torch.Tensor, joints_status: torch.Tensor, steps_since_onset: torch.Tensor):
+    """Log how well the RMA detects the failed joints (status 0), also right after a failure injected while walking."""
+    failed = joints_status < 0.5
+    predicted_failed = predicted_status < 0.5
+
+    def failure_recall(env_mask):
+        mask = failed & env_mask.unsqueeze(1)
+        num_failed = mask.sum()
+        return (predicted_failed & mask).sum() / num_failed.clamp(min=1), num_failed > 0
+
+    all_envs = torch.ones_like(steps_since_onset, dtype=torch.bool)
+    metrics = {
+        "RMA/failure_recall": failure_recall(all_envs),
+        "RMA/onset_failure_recall_0_10_steps": failure_recall((steps_since_onset >= 0) & (steps_since_onset < 10)),
+        "RMA/onset_failure_recall_10_30_steps": failure_recall((steps_since_onset >= 10) & (steps_since_onset < 30)),
+    }
+    num_working = (~failed).sum()
+    metrics["RMA/false_failure_rate"] = ((predicted_failed & ~failed).sum() / num_working.clamp(min=1), num_working > 0)
+
+    log = self.extras.setdefault("log", {})
+    for key, (value, valid) in metrics.items():
+        if valid:
+            log[key] = value
 
 
 def _normalize_actuator_gain(gain: torch.Tensor, nominal_gain: torch.Tensor) -> torch.Tensor:

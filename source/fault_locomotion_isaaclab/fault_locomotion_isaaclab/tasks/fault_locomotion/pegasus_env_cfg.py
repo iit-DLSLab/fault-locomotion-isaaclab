@@ -211,15 +211,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     use_rma = False
     if(use_rma):
         rma_network_type = "tcn" # "mlp" or "tcn"
-        rma_use_latent_space = False
-        if(rma_use_latent_space):
-            rma_latent_space = 8
-            rma_latent_encoder_hidden_features = 128
-            rma_latent_encoder_seed = 0
-        
-        rma_privileged_observation_space = 12 # joint status
-
-        rma_output_space = rma_latent_space if rma_use_latent_space else rma_privileged_observation_space
+        rma_output_space = 12 # joint status, predicted as logits (1 working, 0 failed)
 
         #single_rma_observation_space = 3 # base linear acceleration
         single_rma_observation_space = 3 # base angular velocity  
@@ -237,6 +229,10 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
         rma_ep_saving_interval = 1000
         rma_ep_saving_start = 6000
         rma_ep_saving_end = 8000
+        # Samples saved at every step from the envs right after a failure injected while walking (rare but the
+        # ones where the RMA has to detect it), taken in this window of steps after the failure
+        rma_onset_samples_per_step = 4  # out of 16
+        rma_onset_window = (3, 30)
 
 
     # Base-centered height scanner for pose-related rewards and privileged observations.

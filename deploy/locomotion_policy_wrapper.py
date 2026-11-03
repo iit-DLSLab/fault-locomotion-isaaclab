@@ -104,7 +104,11 @@ class LocomotionPolicyWrapper:
 
         # Phase/leg indicator appended to observation
         # Order: [FL_hip, FR_hip, RL_hip, RR_hip, FL_thigh, FR_thigh, RL_thigh, RR_thigh, FL_calf, FR_calf, RL_calf, RR_calf]
+        # Known failure [legs, joints], set from outside (MuJoCo schedule / console), used to simulate the failure
         self._per_leg_joint_status = np.ones((4,3), dtype=np.float32)
+        # Joint status as seen by the policy [legs, joints]: the known one, or the RMA prediction when it is used.
+        # It drives the observation, the explicit expert activation and the action rearrangement, as in training
+        self._policy_per_leg_joint_status = np.ones((4,3), dtype=np.float32)
 
 
     def _get_projected_gravity(self, quat_wxyz):        
@@ -129,7 +133,7 @@ class LocomotionPolicyWrapper:
     def _rearrange_explicit_expert_actions(self, actions):
         actions = actions.reshape(1, -1).copy()
 
-        legs_status = self._per_leg_joint_status.astype(dtype=bool).reshape(1, 4, 3).all(axis=2)
+        legs_status = self._policy_per_leg_joint_status.astype(dtype=bool).reshape(1, 4, 3).all(axis=2)
         legs_status = legs_status.reshape(legs_status.shape[0], -1)
         legs_down = ~legs_status
         num_legs_down = legs_down.sum(axis=1)
@@ -334,10 +338,14 @@ class LocomotionPolicyWrapper:
             self._observation_history_rma = np.vstack((past_rma, copy.deepcopy(obs_rma)))
             obs_rma = self._observation_history_rma.flatten()
             prediction_rma = self._rma_network(torch.tensor(obs_rma, dtype=torch.float32).unsqueeze(0)).detach().numpy().squeeze()
+            # The network outputs logits
             joints_status_rma = (1.0 / (1.0 + np.exp(-prediction_rma)) >= 0.5).astype(np.float32)
             obs = np.concatenate((obs, joints_status_rma), axis=0)
+            # [hips, thighs, calves] -> [legs, joints]
+            self._policy_per_leg_joint_status = joints_status_rma.reshape(3, 4).transpose(1, 0).copy()
         else:
             obs = np.concatenate((obs, self._per_leg_joint_status.transpose(1, 0).reshape(12,).copy()), axis=0)
+            self._policy_per_leg_joint_status = self._per_leg_joint_status.copy()
 
 
         if(self.use_observation_history):
@@ -362,7 +370,7 @@ class LocomotionPolicyWrapper:
             obs = np.concatenate((obs, height_data), axis=0)
 
         if(config.training_agent["moe_cfg"]["use_explicit_expert"] == True):
-            legs_status =  self._per_leg_joint_status.astype(dtype=bool).reshape(1, 4, 3).all(axis=2)
+            legs_status =  self._policy_per_leg_joint_status.astype(dtype=bool).reshape(1, 4, 3).all(axis=2)
             legs_status = legs_status.reshape(legs_status.shape[0], -1)
             legs_down = ~legs_status
             num_legs_down = legs_down.sum(axis=1)

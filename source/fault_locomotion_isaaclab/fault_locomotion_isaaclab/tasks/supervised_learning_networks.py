@@ -1,6 +1,5 @@
 import torch
 from torch.utils.data import Dataset
-import math
 import random
 import os
 import tempfile
@@ -12,11 +11,24 @@ class CustomDataset(Dataset):
         self.labels = []
         self.max_size = max_size
 
-    def add_sample(self, input_data, label):
+    def add_sample(self, input_data, label, priority_ids=None, num_priority_samples=0):
         # There is a problem! we append (num_envs, features) as one element inside the list, not N!
 
         # Save only random 16 element from the input_data and label
-        random_idx = random.sample(range(input_data.size(0)), min(16, input_data.size(0)))
+        num_samples = min(16, input_data.size(0))
+        random_idx = random.sample(range(input_data.size(0)), num_samples)
+
+        # Replace some of the random elements with the priority ones (e.g. rare events to oversample),
+        # keeping the same number of elements so that all the dataset entries can be batched together
+        if priority_ids is not None and num_priority_samples > 0:
+            priority_ids = priority_ids.tolist() if torch.is_tensor(priority_ids) else list(priority_ids)
+            num_priority = min(num_priority_samples, len(priority_ids), num_samples)
+            if num_priority > 0:
+                chosen_ids = random.sample(priority_ids, num_priority)
+                chosen_set = set(chosen_ids)
+                other_ids = [idx for idx in random_idx if idx not in chosen_set]
+                random_idx = chosen_ids + other_ids[: num_samples - num_priority]
+
         input_data_cpu = input_data[random_idx].clone().detach().cpu()
         label_cpu = label[random_idx].clone().detach().cpu()
 
@@ -40,17 +52,54 @@ class CustomDataset(Dataset):
         return self.data[idx], self.labels[idx]
 
 
+OUTPUT_ACTIVATIONS = ("tanh", "identity")
+
+
+def _apply_output_activation(x, output_activation):
+    if output_activation == "tanh":
+        return torch.tanh(x) * 2.0
+    return x
+
+
 class SupervisedNetworkBase(torch.nn.Module):
     network_type = "base"
 
-    def __init__(self, in_features, out_features, dataset_max_size=80000):
+    def __init__(self, in_features, out_features, dataset_max_size=80000, output_activation="tanh"):
         super().__init__()
+        if output_activation not in OUTPUT_ACTIVATIONS:
+            raise ValueError(f"Unknown output_activation: {output_activation}, expected one of {OUTPUT_ACTIVATIONS}")
         self.input_features = in_features
         self.output_features = out_features
+        # "tanh": outputs in [-2, 2], for regression. "identity": raw outputs, e.g. logits for a binary classification
+        self.output_activation = output_activation
         self.dataset = CustomDataset(max_size=dataset_max_size)
 
+    def _make_loss_fn(self, loss_type, device, max_class_weight):
+        if loss_type == "mse":
+            return torch.nn.MSELoss()
+        if loss_type != "binary_cross_entropy_with_logits":
+            raise ValueError(f"Unknown loss_type: {loss_type}")
+
+        # Binary targets (1 or 0) with an independent class balance for each output: the 0 samples of each output
+        # are weighted by n_1 / n_0 (clamped to max_class_weight), so a rare 0 class is not ignored
+        labels = torch.cat([label.reshape(-1, label.size(-1)) for label in self.dataset.labels])
+        num_zeros = (labels < 0.5).sum(dim=0).float()
+        num_ones = labels.size(0) - num_zeros
+        zero_class_weight = torch.where(
+            num_zeros > 0, (num_ones / num_zeros.clamp(min=1.0)).clamp(max=max_class_weight), torch.ones_like(num_zeros)
+        ).to(device)
+        print(f"Class 0 frequency per output: {(num_zeros / labels.size(0)).numpy().round(3)}")
+        print(f"Class 0 weight per output: {zero_class_weight.cpu().numpy().round(2)}")
+
+        def weighted_bce_with_logits(predictions, targets):
+            weight = torch.where(targets < 0.5, zero_class_weight, torch.ones_like(targets))
+            return torch.nn.functional.binary_cross_entropy_with_logits(predictions, targets, weight=weight)
+
+        return weighted_bce_with_logits
+
     def train_network(self, batch_size=256, epochs=1000, learning_rate=1e-3, device='cpu', validation_split=0.2,
-                      validation_interval=50, early_stopping_patience=5, early_stopping_min_delta=0.0):
+                      validation_interval=50, early_stopping_patience=5, early_stopping_min_delta=0.0,
+                      loss_type="mse", max_class_weight=10.0):
         """Train the network with validation loss tracking and early stopping.
 
         Args:
@@ -62,6 +111,9 @@ class SupervisedNetworkBase(torch.nn.Module):
             validation_interval: Number of epochs between two validations
             early_stopping_patience: Number of validations without improvement before stopping, None to disable
             early_stopping_min_delta: Minimum decrease of the validation loss to count as an improvement
+            loss_type: "mse" for regression, "binary_cross_entropy_with_logits" for binary targets (1 or 0), with
+                the network outputs used as logits (use output_activation="identity") and a class balance per output
+            max_class_weight: Maximum weight of the 0 class with "binary_cross_entropy_with_logits"
         """
         # Split dataset into training and validation
         dataset_size = len(self.dataset)
@@ -79,7 +131,8 @@ class SupervisedNetworkBase(torch.nn.Module):
         
         # Define optimizer and loss function
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-        loss_fn = torch.nn.MSELoss()
+        loss_fn = self._make_loss_fn(loss_type, device, max_class_weight)
+        is_binary = loss_type == "binary_cross_entropy_with_logits"
 
         # Create DataLoaders for training and validation
         train_loader = torch.utils.data.DataLoader(
@@ -135,18 +188,37 @@ class SupervisedNetworkBase(torch.nn.Module):
                 self.eval()
                 val_loss = 0.0
                 val_batches = 0
-                
+                # Binary metrics for each output: recall of the 0 class and rate of 1 samples predicted as 0
+                true_zeros = false_zeros = num_zeros = num_ones = 0
+
                 with torch.no_grad():
                     for inputs, targets in val_loader:
                         inputs = inputs.reshape(-1, inputs.size(-1)).clone().to(device)
                         targets = targets.reshape(-1, targets.size(-1)).clone().to(device)
                         predictions = self(inputs)
-                        
+
                         loss = loss_fn(predictions, targets)
                         val_loss += loss.item()
                         val_batches += 1
-                
+
+                        if is_binary:
+                            predicted_zero = predictions < 0.0
+                            actual_zero = targets < 0.5
+                            true_zeros = true_zeros + (predicted_zero & actual_zero).sum(dim=0)
+                            false_zeros = false_zeros + (predicted_zero & ~actual_zero).sum(dim=0)
+                            num_zeros = num_zeros + actual_zero.sum(dim=0)
+                            num_ones = num_ones + (~actual_zero).sum(dim=0)
+
                 avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
+
+                if is_binary and val_batches > 0:
+                    nan = torch.full_like(true_zeros, float("nan"), dtype=torch.float)
+                    zero_recall = torch.where(num_zeros > 0, true_zeros / num_zeros.clamp(min=1), nan)
+                    false_zero_rate = torch.where(num_ones > 0, false_zeros / num_ones.clamp(min=1), nan)
+                    print(f"Epoch {epoch + 1}/{epochs} - Val class 0 recall per output: "
+                          f"{zero_recall.cpu().numpy().round(3)}")
+                    print(f"Epoch {epoch + 1}/{epochs} - Val class 1 predicted as 0 per output: "
+                          f"{false_zero_rate.cpu().numpy().round(3)}")
                 
                 # Track best validation loss, keeping a copy of the best weights
                 if avg_val_loss < best_val_loss - early_stopping_min_delta:
@@ -202,8 +274,8 @@ class SupervisedNetworkBase(torch.nn.Module):
 class MlpNN(SupervisedNetworkBase):
     network_type = "mlp"
 
-    def __init__(self, in_features, out_features):
-        super().__init__(in_features, out_features)
+    def __init__(self, in_features, out_features, output_activation="tanh"):
+        super().__init__(in_features, out_features, output_activation=output_activation)
         self.fc1 = torch.nn.Linear(in_features, 128)
         self.fc2 = torch.nn.Linear(128, 128)
         self.fc3 = torch.nn.Linear(128, 128)
@@ -213,8 +285,10 @@ class MlpNN(SupervisedNetworkBase):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         x = torch.relu(self.fc3(x))
-        x = torch.tanh(self.fc4(x))*2.0
-        return x
+        return _apply_output_activation(self.fc4(x), self.output_activation)
+
+    def _checkpoint_kwargs(self):
+        return {'output_activation': self.output_activation}
 
 
 class Chomp1d(torch.nn.Module):
@@ -275,8 +349,9 @@ class TemporalConvNN(SupervisedNetworkBase):
         hidden_channels=(128, 128, 128),
         kernel_size=3,
         dropout=0.0,
+        output_activation="tanh",
     ):
-        super().__init__(in_features, out_features)
+        super().__init__(in_features, out_features, output_activation=output_activation)
         if sequence_length <= 0:
             raise ValueError("sequence_length must be positive.")
         if in_features % sequence_length != 0:
@@ -317,8 +392,7 @@ class TemporalConvNN(SupervisedNetworkBase):
         x = self.temporal_net(x)
         x = x[:, :, -1]
         x = torch.relu(self.fc1(x))
-        x = torch.tanh(self.fc2(x))*2.0
-        return x
+        return _apply_output_activation(self.fc2(x), self.output_activation)
 
     def _checkpoint_kwargs(self):
         return {
@@ -326,41 +400,8 @@ class TemporalConvNN(SupervisedNetworkBase):
             'hidden_channels': self.hidden_channels,
             'kernel_size': self.kernel_size,
             'dropout': self.dropout,
+            'output_activation': self.output_activation,
         }
-
-
-class FrozenRandomMlpEncoder(torch.nn.Module):
-    def __init__(self, in_features, latent_features, hidden_features=128, seed=0):
-        super().__init__()
-        self.input_features = in_features
-        self.latent_features = latent_features
-        self.hidden_features = hidden_features
-        self.seed = seed
-        self.encoder = torch.nn.Sequential(
-            torch.nn.Linear(in_features, hidden_features),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_features, latent_features),
-            torch.nn.Tanh(),
-        )
-        self._reset_parameters(seed)
-        for parameter in self.parameters():
-            parameter.requires_grad_(False)
-        self.eval()
-
-    def _reset_parameters(self, seed):
-        generator = torch.Generator(device="cpu")
-        generator.manual_seed(seed)
-        for module in self.encoder:
-            if isinstance(module, torch.nn.Linear):
-                bound = 1.0 / math.sqrt(module.in_features)
-                module.weight.data.uniform_(-bound, bound, generator=generator)
-                module.bias.data.uniform_(-bound, bound, generator=generator)
-
-    def encode(self, x):
-        return self.encoder(x)
-
-    def forward(self, x):
-        return self.encode(x)
 
 
 def create_supervised_network(in_features, out_features, network_type="mlp", **kwargs):
@@ -370,12 +411,13 @@ def create_supervised_network(in_features, out_features, network_type="mlp", **k
         in_features: Flattened input dimension.
         out_features: Output dimension.
         network_type: "mlp" for MlpNN or "tcn" for TemporalConvNN.
-        **kwargs: Extra architecture args. TCN requires sequence_length.
+        **kwargs: Extra architecture args. TCN requires sequence_length. Both accept output_activation
+            ("tanh" by default, or "identity").
     """
     kwargs = dict(kwargs)
     normalized_type = (network_type or "mlp").lower()
     if normalized_type in ("mlp", "simple", "simple_nn"):
-        return MlpNN(in_features, out_features)
+        return MlpNN(in_features, out_features, output_activation=kwargs.get("output_activation", "tanh"))
     if normalized_type in ("tcn", "temporal_cnn", "temporal_conv", "temporal_convolution"):
         return TemporalConvNN(in_features, out_features, **kwargs)
     raise ValueError(f"Unknown supervised network type: {network_type}")
@@ -412,13 +454,10 @@ if __name__ == "__main__":
     features_per_step = 48
     input_features = sequence_length * features_per_step
     output_features = 3
-    privileged_features = 33
-    latent_features = 8
     batch_size = 16
 
     test_inputs = torch.randn(batch_size, input_features)
     test_targets = torch.randn(batch_size, output_features).clamp(-2.0, 2.0)
-    privileged_targets = torch.randn(batch_size, privileged_features).clamp(-2.0, 2.0)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         for network_type in ("mlp", "tcn"):
@@ -449,25 +488,19 @@ if __name__ == "__main__":
 
             print(f"{network_type} smoke test passed.")
 
-        random_encoder = FrozenRandomMlpEncoder(privileged_features, latent_features, hidden_features=32, seed=123)
-        latent_targets = random_encoder.encode(privileged_targets)
-        assert latent_targets.shape == (batch_size, latent_features), (
-            f"Latent target shape mismatch: {latent_targets.shape}"
-        )
-        assert all(not parameter.requires_grad for parameter in random_encoder.parameters())
-
-        latent_predictor = create_supervised_network(
+        # RMA: binary joint status (1 working, 0 failed) predicted as logits
+        joint_status_targets = (torch.rand(batch_size, 12) > 0.3).float()
+        rma = create_supervised_network(
             input_features,
-            latent_features,
+            12,
             network_type="tcn",
             sequence_length=sequence_length,
+            output_activation="identity",
         )
         for _ in range(5):
-            latent_predictor.dataset.add_sample(test_inputs, latent_targets)
-        latent_predictor.train_network(batch_size=2, epochs=2, learning_rate=1e-3, validation_split=0.2)
-        latent_predictions = latent_predictor(test_inputs)
-        assert latent_predictions.shape == (batch_size, latent_features), (
-            f"Latent predictor shape mismatch: {latent_predictions.shape}"
-        )
+            rma.dataset.add_sample(test_inputs, joint_status_targets, priority_ids=torch.tensor([0, 1]), num_priority_samples=4)
+        rma.train_network(batch_size=2, epochs=2, learning_rate=1e-3, validation_split=0.2,
+                          loss_type="binary_cross_entropy_with_logits")
+        assert rma(test_inputs).shape == (batch_size, 12)
 
-        print("random-latent RMA smoke test passed.")
+        print("binary RMA smoke test passed.")
