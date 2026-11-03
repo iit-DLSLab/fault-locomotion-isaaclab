@@ -155,7 +155,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             policy_terms = (
                 proprio_terms + [("clock", 8 if cfg.use_clock_signal else 0), joint_status_term]
             ) * cfg.history_length
-            if getattr(cfg, "use_vision", False):
+            if getattr(cfg, "perceptive_height_scanner", None) is not None:
                 pattern_cfg = cfg.perceptive_height_scanner.pattern_cfg
                 height_map_x_points = int(round(pattern_cfg.size[0] / pattern_cfg.resolution)) + 1
                 height_map_y_points = int(round(pattern_cfg.size[1] / pattern_cfg.resolution)) + 1
@@ -291,8 +291,8 @@ class FaultLocomotionEnv(DirectRLEnv):
             self.scene.sensors[f"{foot_name.lower()}_height_scanner"] = scanner
             self._foot_height_scanners.append(scanner)
 
-        # we add a second height scanner for the vision-based locomotion
-        if(getattr(self.cfg, "use_vision", False)):
+        # Add the perceptive scanner only for vision-based locomotion.
+        if(getattr(self.cfg, "perceptive_height_scanner", None) is not None):
             self._perceptive_height_scanner = RayCaster(self.cfg.perceptive_height_scanner)
             self.scene.sensors["perceptive_height_scanner"] = self._perceptive_height_scanner
 
@@ -498,7 +498,7 @@ class FaultLocomotionEnv(DirectRLEnv):
 
 
         # Add heightmap data to obs if needed
-        if(getattr(self.cfg, "use_vision", False)):
+        if(getattr(self.cfg, "perceptive_height_scanner", None) is not None):
             height_data = (
                 self._perceptive_height_scanner.data.pos_w[:, 2].unsqueeze(1) - self._perceptive_height_scanner.data.ray_hits_w[..., 2] - 0.5
             )

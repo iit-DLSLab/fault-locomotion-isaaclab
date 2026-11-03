@@ -57,7 +57,7 @@ def _set_debug_vis_impl(self, debug_vis: bool):
     show_height_map = (
         debug_vis
         and getattr(self.cfg, "visualize_height_map_with_noise", False)
-        and getattr(self.cfg, "use_vision", False)
+        and getattr(self.cfg, "perceptive_height_scanner", None) is not None
     )
     if show_height_map and self._height_map_visualizer is None:
         marker_radius = getattr(self.cfg, "height_map_visualization_dot_radius", 0.015)

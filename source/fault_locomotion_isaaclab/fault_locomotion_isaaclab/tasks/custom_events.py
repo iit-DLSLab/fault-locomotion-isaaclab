@@ -683,10 +683,10 @@ def _sample_random_commands(self, env_ids: torch.Tensor | None = None) -> torch.
     commands[:, 1] *= 0.25
     commands[:, 2] *= 0.3
 
-    per_leg_joint_status = self._per_leg_joint_status if env_ids is None else self._per_leg_joint_status[env_ids]
-    legs_status = per_leg_joint_status.all(dim=2)
-    num_legs_down = (~legs_status).sum(dim=1)
-    commands = commands * (num_legs_down != 0).unsqueeze(1)
+    #per_leg_joint_status = self._per_leg_joint_status if env_ids is None else self._per_leg_joint_status[env_ids]
+    #legs_status = per_leg_joint_status.all(dim=2)
+    #num_legs_down = (~legs_status).sum(dim=1)
+    #commands = commands * (num_legs_down != 0).unsqueeze(1)
     return commands
 
 

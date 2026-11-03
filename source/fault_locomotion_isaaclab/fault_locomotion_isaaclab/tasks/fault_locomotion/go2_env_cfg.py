@@ -596,12 +596,9 @@ class Go2RoughVisionEnvCfg(Go2RoughBlindEnvCfg):
         self.feet_edge_stance_reward_scale = -1.0
         self.feet_edge_swing_reward_scale = -2.0
 
-    use_vision = True
-
     # green dots on the terrain hit by the perceptive height scanner, red dots on the height map seen by the policy
     # (with the observation noise)
-    visualize_height_map_with_noise = False
-
+    visualize_height_map_with_noise = True
 
     # we add a height scanner for perceptive locomotion
     perceptive_height_scanner = RayCasterCfg(
