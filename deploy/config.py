@@ -9,17 +9,17 @@ scene = 'scene_random_boxes'  # scene_flat, scene_random_boxes
 
 # ----------------------------------------------------------------------------------------------------------------
 if(robot == "go2"):
-    Kp_walking = 20.0
-    Kd_walking = 2.0
+    Kp_walking = 25.0
+    Kd_walking = 1.5
 
     Kp_stand_up_and_down = 50.
     Kd_stand_up_and_down = 5.
 
 elif(robot == "b2"):
-    Kp_walking = 100.
-    Kd_walking = 5.
+    Kp_walking = 120.
+    Kd_walking = 6.
 
-    Kp_stand_up_and_down = 100.
+    Kp_stand_up_and_down = 50.
     Kd_stand_up_and_down = 5.
 
 elif(robot == "pegasus"):
@@ -44,4 +44,3 @@ with open(policy_folder_path + "/params/env.yaml", "r") as file:
 with open(policy_folder_path + "/params/agent.yaml", "r") as file:
     training_agent = yaml.unsafe_load(file)
 
-use_vision = False  # If True, use the vision observations in the RL policy #TODO add in yaml

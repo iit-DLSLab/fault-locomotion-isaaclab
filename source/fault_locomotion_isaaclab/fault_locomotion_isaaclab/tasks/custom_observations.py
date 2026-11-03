@@ -14,7 +14,7 @@ def _get_concurrent_state_estimation(self):
         [
             tensor
             for tensor in (
-                self._imu.data.lin_acc_b,
+                #self._imu.data.lin_acc_b,
                 self._imu.data.ang_vel_b,
                 self._pva.data.projected_gravity_b,
                 self._commands,
@@ -68,7 +68,7 @@ def _get_rma(self):
         [
             tensor
             for tensor in (
-                self._imu.data.lin_acc_b,
+                #self._imu.data.lin_acc_b,
                 self._imu.data.ang_vel_b,
                 self._pva.data.projected_gravity_b,
                 self._commands,
@@ -96,7 +96,7 @@ def _get_rma(self):
     # Prediction
     num_episode_from_start = self.common_step_counter / 24. #self.max_episode_length #HACK this should be taken from rsl rl
     num_final_episode_from_start = self.cfg.rma_ep_saving_end
-    if num_episode_from_start > self.cfg.rma_ep_saving_interval:
+    if num_episode_from_start > self.cfg.rma_ep_saving_start:
         with torch.no_grad():
             prediction_rma = self._rma_network(obs)
         obs_rma = (torch.sigmoid(prediction_rma) >= 0.5).to(prediction_rma.dtype)

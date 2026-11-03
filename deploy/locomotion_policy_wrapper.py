@@ -12,6 +12,7 @@ from tqdm import tqdm
 import mujoco
 import onnxruntime as ort
 import torch
+from scipy.spatial.transform import Rotation
 
 import config
 
@@ -39,6 +40,10 @@ class LocomotionPolicyWrapper:
         self.action_scale = config.training_env["action_scale"]
         self.past_rl_actions = np.zeros(12)
 
+        # Max change of the velocity command per second (m/s^2 and rad/s^2), so a step from keyboard or joystick becomes a ramp
+        self.max_cmd_acc = 1.0
+        self.filtered_cmd = np.zeros(3)  # vx, vy in the heading frame and yaw rate
+
         keyframe_id = mujoco.mj_name2id(mjModel, mujoco.mjtObj.mjOBJ_KEY, "home")
         standUp_qpos = mjModel.key_qpos[keyframe_id]
         self.default_joint_pos_leg = standUp_qpos[7:19]
@@ -48,28 +53,34 @@ class LocomotionPolicyWrapper:
 
         self.use_clock_signal = config.training_env["use_clock_signal"]
 
-
-        self.step_freq = 1.4
-        self.duty_factor = 0.65
-        self.phase_offset = np.array([0.0, 0.5, 0.5, 0.0])
-        self.phase_signal = self.phase_offset
+        # Step frequency ramps linearly with the commanded xy linear velocity norm, from
+        # desired_step_freq (at/below step_freq_vel_norm_low) up to desired_step_freq_max
+        # (at/above step_freq_vel_norm_high). Falls back to a fixed 1.4 Hz step frequency
+        # (no ramp) for policies exported before these fields existed. See compute_control().
+        self.desired_step_freq = config.training_env.get("desired_step_freq", 1.4)
+        self.desired_step_freq_max = config.training_env.get("desired_step_freq_max", self.desired_step_freq)
+        self.step_freq_vel_norm_low = config.training_env.get("step_freq_vel_norm_low", 0.0)
+        self.step_freq_vel_norm_high = config.training_env.get("step_freq_vel_norm_high", 1.0)
+        self.step_freq = self.desired_step_freq
+        self.duty_factor = config.training_env["desired_duty_factor"]
+        self.phase_offset = np.array(config.training_env["desired_phase_offset"])
+        self.phase_signal = self.phase_offset.copy()
 
         self.desired_clip_actions = config.training_env["desired_clip_actions"]
 
         self.use_filter_actions = config.training_env["use_filter_actions"]
+        self.action_filter_alpha = config.training_env["action_filter_alpha"]
+        self.filtered_rl_actions = np.zeros(12)
 
 
         self.use_observation_history = config.training_env["use_observation_history"]
         self.history_length = config.training_env["history_length"]
         if(self.use_observation_history):
             self.observation_space = self.observation_space * self.history_length
-        single_observation_space = int(self.observation_space/self.history_length)
+        single_observation_space = int(config.training_env["single_observation_space"])
         self._observation_history = np.zeros((self.history_length, single_observation_space), dtype=np.float32)
 
-        try:
-            self.use_vision = config.training_env["use_vision"]
-        except:
-            self.use_vision = False
+        self.use_vision = config.training_env.get("use_vision", False)
 
 
         # RMA
@@ -80,10 +91,11 @@ class LocomotionPolicyWrapper:
             self._observation_history_rma = np.zeros((self.rma_history_length, single_rma_observation_space), dtype=np.float32)
 
         # Learned State Estimator
-        if(config.training_env["use_concurrent_state_est"] == True):
+        if(config.training_env["base_state_source"] == "concurrent_se"):
             self._concurrent_state_est_network = load_network(config.concurrent_state_est_network, device='cpu')
             single_concurrent_state_est_observation_space = int(config.training_env["single_concurrent_state_est_observation_space"])
-            self._observation_history_concurrent_state_est = np.zeros((self.history_length, single_concurrent_state_est_observation_space), dtype=np.float32)
+            concurrent_state_est_history_length = int(config.training_env.get("concurrent_state_est_history_length", self.history_length))
+            self._observation_history_concurrent_state_est = np.zeros((concurrent_state_est_history_length, single_concurrent_state_est_observation_space), dtype=np.float32)
 
 
         # Desired joint vector
@@ -150,9 +162,23 @@ class LocomotionPolicyWrapper:
             heightmap_data=None):
 
         # Update Observation ----------------------        
-        if(config.training_env["use_imu"] or config.training_env["use_concurrent_state_est"]):
+        if(config.training_env["base_state_source"] != "ground_truth"):
+            if(config.robot == "pegasus"):
+                # The Pegasus IMU is mounted rotated by -90 deg around z w.r.t. the base (see the "imu" site in
+                # pegasus.xml), while the policy is trained with the IMU aligned to the base: bring the readings
+                # into the base frame.
+                base_to_imu_rotation = Rotation.from_euler("z", -90.0, degrees=True)
+                imu_linear_acceleration = base_to_imu_rotation.apply(imu_linear_acceleration)
+                imu_angular_velocity = base_to_imu_rotation.apply(imu_angular_velocity)
+                base_rotation = Rotation.from_quat(np.roll(imu_orientation, -1)) * base_to_imu_rotation.inv()
+                imu_orientation = np.roll(base_rotation.as_quat(), 1)
+
             base_projected_gravity = self._get_projected_gravity(imu_orientation)
-            base_linear = imu_linear_acceleration
+            if(config.training_env["base_state_source"] == "imu"):
+                # In training the IMU linear acceleration is zeroed (see fault_locomotion_env.py), so do the same here
+                base_linear = np.zeros(3)
+            else:
+                base_linear = imu_linear_acceleration
             base_ang_vel = imu_angular_velocity
         else:
             base_projected_gravity = self._get_projected_gravity(base_quat_wxyz)
@@ -162,6 +188,13 @@ class LocomotionPolicyWrapper:
 
         # Get the reference base velocity in the world frame
         ref_base_lin_vel_h = heading_orientation_SO3.T@ref_base_lin_vel
+
+        # Rate limit the command
+        target_cmd = np.array([ref_base_lin_vel_h[0], ref_base_lin_vel_h[1], ref_base_ang_vel[2]])
+        max_delta = self.max_cmd_acc / self.RL_FREQ
+        self.filtered_cmd += np.clip(target_cmd - self.filtered_cmd, -max_delta, max_delta)
+        ref_base_lin_vel_h[0:2] = self.filtered_cmd[0:2]
+        ref_base_ang_vel = np.array([ref_base_ang_vel[0], ref_base_ang_vel[1], self.filtered_cmd[2]])
         
             
         # Fill the observation vector
@@ -176,8 +209,8 @@ class LocomotionPolicyWrapper:
         joints_vel_RL = joints_vel_leg[6:9]
         joints_vel_RR = joints_vel_leg[9:12]
         obs = np.concatenate([
-            base_linear, # this could be imu linear acc if use_imu or linear vel from state est
-            base_ang_vel, # this could be imu angular vel if use_imu or angular vel from state est
+            base_linear, # this could be imu linear acc if base_state_source is "imu" or linear vel from state est
+            base_ang_vel, # this could be imu angular vel if base_state_source is "imu" or angular vel from state est
             base_projected_gravity,
             ref_base_lin_vel_h[0:2],
             [ref_base_ang_vel[2]],
@@ -205,20 +238,36 @@ class LocomotionPolicyWrapper:
 
         # Phase Signal
         if(self.use_clock_signal):
+            # Ramp the step frequency linearly with the commanded xy linear velocity norm:
+            # desired_step_freq below step_freq_vel_norm_low, desired_step_freq_max above
+            # step_freq_vel_norm_high, linear in between.
+            ref_lin_vel_xy_norm = np.linalg.norm(ref_base_lin_vel_h[0:2])
+            ramp = (ref_lin_vel_xy_norm - self.step_freq_vel_norm_low) / (
+                self.step_freq_vel_norm_high - self.step_freq_vel_norm_low
+            )
+            ramp = np.clip(ramp, 0.0, 1.0)
+            self.step_freq = self.desired_step_freq + ramp * (self.desired_step_freq_max - self.desired_step_freq)
+
             self.phase_signal += self.step_freq * (1 / (self.RL_FREQ))
             self.phase_signal = self.phase_signal % 1.0
-            obs = np.concatenate((obs, self.phase_signal), axis=0)
-
+            # While standing the phase is held at the phase offset, as in training
             commands = np.array([ref_base_lin_vel_h[0], ref_base_lin_vel_h[1], ref_base_ang_vel[2]], dtype=np.float32)
             if(np.linalg.norm(commands) < 0.01):
-                obs[48:52] = -1.0
+                self.phase_signal = self.phase_offset.copy()
+            # sin and cos of the phase of each leg, as in training: [sin FL..RR, cos FL..RR]
+            clock_data = np.concatenate((np.sin(2.0 * np.pi * self.phase_signal), np.cos(2.0 * np.pi * self.phase_signal)))
+            obs = np.concatenate((obs, clock_data), axis=0)
+
+            # OLD: clock set to -1 while standing
+            #if(np.linalg.norm(commands) < 0.01):
+            #    obs[48:56] = -1.0
 
 
-        if(config.training_env["use_concurrent_state_est"] == True):
+        if(config.training_env["base_state_source"] == "concurrent_se"):
 
             obs_concurrent_state_est = np.concatenate([
-                base_linear , # this could be imu linear acc if use_imu or linear vel from state est
-                base_ang_vel, # this could be imu angular vel if use_imu or angular vel from state est
+                #base_linear, # this could be imu linear acc if base_state_source is "imu" or linear vel from state est
+                base_ang_vel, # this could be imu angular vel if base_state_source is "imu" or angular vel from state est
                 base_projected_gravity,
                 ref_base_lin_vel_h[0:2],
                 [ref_base_ang_vel[2]],
@@ -254,8 +303,8 @@ class LocomotionPolicyWrapper:
             
         if(config.training_env["use_rma"] == True):
             obs_rma = np.concatenate([
-                base_linear, # this could be imu linear acc if use_imu or linear vel from state est
-                base_ang_vel, # this could be imu angular vel if use_imu or angular vel from state est
+                #base_linear,
+                base_ang_vel,
                 base_projected_gravity,
                 ref_base_lin_vel_h[0:2],
                 [ref_base_ang_vel[2]],
@@ -284,7 +333,7 @@ class LocomotionPolicyWrapper:
             self._observation_history_rma = np.vstack((past_rma, copy.deepcopy(obs_rma)))
             obs_rma = self._observation_history_rma.flatten()
             prediction_rma = self._rma_network(torch.tensor(obs_rma, dtype=torch.float32).unsqueeze(0)).detach().numpy().squeeze()
-            joints_status_rma = (torch.sigmoid(prediction_rma) >= 0.5).to(prediction_rma.dtype)
+            joints_status_rma = (1.0 / (1.0 + np.exp(-prediction_rma)) >= 0.5).astype(np.float32)
             obs = np.concatenate((obs, joints_status_rma), axis=0)
         else:
             obs = np.concatenate((obs, self._per_leg_joint_status.transpose(1, 0).reshape(12,).copy()), axis=0)
@@ -337,10 +386,11 @@ class LocomotionPolicyWrapper:
 
         # Action Filtering
         if(self.use_filter_actions):
-            alpha = 0.8
-            past_rl_actions_temp = self.past_rl_actions.copy()
+            # Exponential moving average, as in training
+            alpha = self.action_filter_alpha
             self.past_rl_actions = rl_action_temp.copy()
-            rl_action_temp = alpha * rl_action_temp + (1-alpha) * past_rl_actions_temp
+            self.filtered_rl_actions = alpha * rl_action_temp + (1-alpha) * self.filtered_rl_actions
+            rl_action_temp = self.filtered_rl_actions.copy()
         else:
             self.past_rl_actions = rl_action_temp.copy()
 

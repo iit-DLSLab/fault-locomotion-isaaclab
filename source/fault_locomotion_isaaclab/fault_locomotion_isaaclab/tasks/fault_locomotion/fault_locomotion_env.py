@@ -28,9 +28,9 @@ from isaaclab.utils.noise import NoiseModel
 from isaaclab import cloner
 
 try:
-    from .. import custom_rewards, custom_events, custom_observations
+    from .. import custom_rewards, custom_events, custom_observations, custom_visualizations
 except Exception:
-    from fault_locomotion_isaaclab.tasks import custom_rewards, custom_events, custom_observations
+    from fault_locomotion_isaaclab.tasks import custom_rewards, custom_events, custom_observations, custom_visualizations
 
 
 from .go2_env_cfg import Go2FlatEnvCfg, Go2RoughVisionEnvCfg, Go2RoughBlindEnvCfg
@@ -41,6 +41,9 @@ from fault_locomotion_isaaclab.tasks.supervised_learning_networks import FrozenR
 class FaultLocomotionEnv(DirectRLEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
+        self._edge_map_visualizer = None
+        self._feet_edge_swing_visualizer = None
+        self._height_map_visualizer = None
         super().__init__(cfg, render_mode, **kwargs)
 
         # Joint position command (deviation from default joint positions)
@@ -49,6 +52,12 @@ class FaultLocomotionEnv(DirectRLEnv):
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
         self._previous_previous_actions = torch.zeros(
+            self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
+        )
+        # Vertical feet velocity at the previous step, used to penalize the touchdown velocity
+        self._last_feet_vz = torch.zeros(self.num_envs, 4, device=self.device)
+        # Output of the exponential moving average action filter
+        self._filtered_actions = torch.zeros(
             self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
         )
 
@@ -70,7 +79,10 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._body_masses = self._robot.data.body_mass.torch.clone()
         
         # Periodic gait
-        self._step_freq = torch.tensor(self.cfg.desired_step_freq, device=self.device)
+        # Step frequency ramps linearly with the commanded xy linear velocity norm, from
+        # cfg.desired_step_freq (at/below cfg.step_freq_vel_norm_low) up to
+        # cfg.desired_step_freq_max (at/above cfg.step_freq_vel_norm_high).
+        self._step_freq = torch.full((self.num_envs, 1), self.cfg.desired_step_freq, device=self.device)
         self._duty_factor = torch.tensor(self.cfg.desired_duty_factor, device=self.device)
         self._phase_offset = torch.tensor(self.cfg.desired_phase_offset, device=self.device).repeat(self.num_envs,1)
         self._phase_signal = self._phase_offset.clone()# + self.step_dt * self._step_freq * torch.rand(self.num_envs, 1, device=self.device)*10.
@@ -112,7 +124,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             self._observation_history_rma = torch.zeros(self.num_envs, cfg.rma_history_length, cfg.single_rma_observation_space, device=self.device)
 
         # Learned State Estimator
-        if(cfg.use_concurrent_state_est == True):
+        if(cfg.base_state_source == "concurrent_se"):
             self._concurrent_state_est_network = create_supervised_network(
                 cfg.concurrent_state_est_observation_space,
                 cfg.concurrent_state_est_output_space,
@@ -126,8 +138,11 @@ class FaultLocomotionEnv(DirectRLEnv):
         # The terms must follow the same order used to build the observations
         if self.cfg.observation_noise_model:
             num_joints = cfg.action_space
+            # The policy sees the IMU acceleration only with base_state_source "imu", otherwise a velocity (ground truth or
+            # concurrent SE prediction). The RMA and concurrent SE inputs do not use the IMU linear acceleration
+            base_linear_term = "base_linear_acc" if cfg.base_state_source == "imu" else "base_linear_vel"
             proprio_terms = [
-                ("base_linear", 3),
+                (base_linear_term, 3),
                 ("base_ang_vel", 3),
                 ("projected_gravity", 3),
                 ("commands", 3),
@@ -138,7 +153,7 @@ class FaultLocomotionEnv(DirectRLEnv):
             # with RMA the joint status is replaced by its prediction
             joint_status_term = ("rma", cfg.rma_output_space) if cfg.use_rma else ("joint_status", num_joints)
             policy_terms = (
-                proprio_terms + [("clock", 4 if cfg.use_clock_signal else 0), joint_status_term]
+                proprio_terms + [("clock", 8 if cfg.use_clock_signal else 0), joint_status_term]
             ) * cfg.history_length
             if getattr(cfg, "use_vision", False):
                 pattern_cfg = cfg.perceptive_height_scanner.pattern_cfg
@@ -148,13 +163,18 @@ class FaultLocomotionEnv(DirectRLEnv):
             policy_terms += [("expert_activation", 1)]
 
             self._observation_noise_model = self._make_observation_noise_model(policy_terms)
+            # Global height map offset, the same for all the cells: a bias sampled at reset plus a noise
+            # sampled at every time-step, both shared by the whole height map of an env
+            self._height_map_global_bias = torch.zeros(self.num_envs, 1, device=self.device)
             if cfg.use_rma:
+                # the RMA does not use the IMU linear acceleration
                 self._observation_noise_model_rma = self._make_observation_noise_model(
-                    proprio_terms * cfg.rma_history_length
+                    proprio_terms[1:] * cfg.rma_history_length
                 )
-            if cfg.use_concurrent_state_est:
+            if cfg.base_state_source == "concurrent_se":
+                # the concurrent SE does not use the IMU linear acceleration
                 self._observation_noise_model_concurrent_state_est = self._make_observation_noise_model(
-                    proprio_terms * cfg.concurrent_state_est_history_length
+                    proprio_terms[1:] * cfg.concurrent_state_est_history_length
                 )
 
 
@@ -184,9 +204,14 @@ class FaultLocomotionEnv(DirectRLEnv):
                 "feet_air_time_variance",
                 "feet_height_clearance_aperiodic",
                 "feet_height_clearance_periodic",
+                "feet_swing_trajectory_periodic",
+                "feet_swing_trajectory_aperiodic",
                 "feet_slide",
+                "feet_landing_vel_l2",
                 "feet_to_hip_distance_l2",
                 "com_support_polygon",
+                "feet_edge_stance",
+                "feet_edge_swing",
                 "feet_vertical_surface_contacts",
 
                 "periodic_contact_suggestion",
@@ -233,6 +258,13 @@ class FaultLocomotionEnv(DirectRLEnv):
             self._healthy_actuator_stiffness[joint_type] = actuator.stiffness.clone()
             self._healthy_actuator_damping[joint_type] = actuator.damping.clone()
 
+        if (
+            getattr(self.cfg, "visualize_edge_map", False)
+            or getattr(self.cfg, "visualize_feet_edge_swing_zone", False)
+            or getattr(self.cfg, "visualize_height_map_with_noise", False)
+        ):
+            self.set_debug_vis(True)
+
 
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
@@ -263,6 +295,11 @@ class FaultLocomotionEnv(DirectRLEnv):
         if(getattr(self.cfg, "use_vision", False)):
             self._perceptive_height_scanner = RayCaster(self.cfg.perceptive_height_scanner)
             self.scene.sensors["perceptive_height_scanner"] = self._perceptive_height_scanner
+
+        # The edge scanner is only used by the feet edge rewards (never observed), so it is available for blind locomotion as well
+        if(getattr(self.cfg, "edge_height_scanner", None) is not None):
+            self._edge_height_scanner = RayCaster(self.cfg.edge_height_scanner)
+            self.scene.sensors["edge_height_scanner"] = self._edge_height_scanner
 
         # we add an imu
         self._imu = Imu(self.cfg.imu)
@@ -332,11 +369,11 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Clip the action
         self._actions = torch.clamp(self._actions, -self.cfg.desired_clip_actions, self.cfg.desired_clip_actions)
 
-        # Filter the action
+        # Filter the action with an exponential moving average (low-pass on the filter output, not on the raw actions)
         if(self.cfg.use_filter_actions):
-            alpha = 0.8
-            temp = alpha * self._actions + (1 - alpha) * self._previous_actions
-            self._processed_actions = self.cfg.action_scale * temp + self._robot.data.default_joint_pos[:, self._ids_joints_order]
+            alpha = self.cfg.action_filter_alpha
+            self._filtered_actions = alpha * self._actions + (1 - alpha) * self._filtered_actions
+            self._processed_actions = self.cfg.action_scale * self._filtered_actions + self._robot.data.default_joint_pos[:, self._ids_joints_order]
         else:
             self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos[:, self._ids_joints_order]
 
@@ -368,23 +405,40 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Observation --------------------------------------------------------------------------------------
         clock_data = None
         if(self.cfg.use_clock_signal):
+            # Ramp the step frequency linearly with the commanded xy linear velocity norm:
+            # cfg.desired_step_freq below cfg.step_freq_vel_norm_low, cfg.desired_step_freq_max
+            # above cfg.step_freq_vel_norm_high, linear in between.
+            cmd_lin_vel_xy_norm = torch.norm(self._commands[:, :2], dim=1, keepdim=True)
+            ramp = (cmd_lin_vel_xy_norm - self.cfg.step_freq_vel_norm_low) / (
+                self.cfg.step_freq_vel_norm_high - self.cfg.step_freq_vel_norm_low
+            )
+            ramp = torch.clamp(ramp, 0.0, 1.0)
+            self._step_freq = self.cfg.desired_step_freq + ramp * (self.cfg.desired_step_freq_max - self.cfg.desired_step_freq)
+
+            # Increment the phase signal by the step frequency and wrap to [0, 1)
             self._phase_signal += self.step_dt * self._step_freq
             self._phase_signal = self._phase_signal % 1.0
-            clock_data = torch.vstack([self._phase_signal[:,0], self._phase_signal[:,1], self._phase_signal[:,2], self._phase_signal[:,3]]).T
-            # all the envs that are not moving, we put -1
+            # While standing the phase is held at the phase offset, as after a reset, so walking always
+            # starts from the same point of the gait cycle instead of a random one (possibly mid swing)
             should_move = torch.norm(self._commands[:, :3], dim=1) > 0.01
-            clock_data[:, :] = clock_data[:, :]*should_move.unsqueeze(1).expand(-1, 4) + -1.0* ~should_move.unsqueeze(1).expand(-1, 4)
+            self._phase_signal = torch.where(should_move.unsqueeze(1), self._phase_signal, self._phase_offset)
+            # Encode the phase as sin/cos so the signal stays continuous at the 1 -> 0 wrap: [sin FL..RR, cos FL..RR]
+            # While standing this is the clock of the phase offset (all feet in stance, since offsets < duty factor)
+            clock_data = torch.cat([torch.sin(2.0 * torch.pi * self._phase_signal), torch.cos(2.0 * torch.pi * self._phase_signal)], dim=1)
+
+            # OLD: for all the envs that are not moving, we put -1
+            #clock_data[:, :] = clock_data[:, :]*should_move.unsqueeze(1).expand(-1, 8) + -1.0* ~should_move.unsqueeze(1).expand(-1, 8)
             
 
         # Choosing the main source of observation
-        if(self.cfg.use_concurrent_state_est):
+        if(self.cfg.base_state_source == "concurrent_se"):
             # If Concurrent SE/Learned State Estimator, we predict linear and angular vel from IMU
             velocity_b = custom_observations._get_concurrent_state_estimation(self)
             angular_velocity_b = self._imu.data.ang_vel_b
             projected_gravity_b = self._pva.data.projected_gravity_b
-        elif(self.cfg.use_imu):
+        elif(self.cfg.base_state_source == "imu"):
             # Using directly the IMU
-            velocity_b = self._imu.data.lin_acc_b
+            velocity_b = self._imu.data.lin_acc_b * 0.0 # we don't use the IMU linear acceleration for now, since it is too noisy and not very useful for locomotion
             angular_velocity_b = self._imu.data.ang_vel_b
             projected_gravity_b = self._pva.data.projected_gravity_b
         else:
@@ -439,6 +493,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         if(self.cfg.use_asymmetric_ppo):
             obs_critic = custom_observations._get_privileged_observation(self)
             observations["critic"] = torch.cat((obs, obs_critic), dim=-1)
+        else:
+            observations["critic"] = obs
 
 
         # Add heightmap data to obs if needed
@@ -448,7 +504,13 @@ class FaultLocomotionEnv(DirectRLEnv):
             )
             height_data = torch.nan_to_num(height_data, nan=0.0, posinf=1.0, neginf=-1.0)
             height_data = height_data.clip(-1.0, 1.0)
-            observations["policy"] = torch.cat((observations["policy"], height_data), dim=-1)
+            # The policy also gets the global height map offset, the critic sees the clean height map
+            height_data_policy = height_data
+            if self.cfg.observation_noise_model:
+                global_noise_std = self.cfg.observation_noise_std["height_map_global"][0]
+                height_map_offset = self._height_map_global_bias + global_noise_std * torch.randn_like(self._height_map_global_bias)
+                height_data_policy = height_data + height_map_offset
+            observations["policy"] = torch.cat((observations["policy"], height_data_policy), dim=-1)
             observations["critic"] = torch.cat((observations["critic"], height_data), dim=-1)
 
         # explicit expert_activation: scalar expert id
@@ -518,6 +580,11 @@ class FaultLocomotionEnv(DirectRLEnv):
         feet_to_hip_distance_l2 = custom_rewards.feet_to_hip_distance_l2(self)
         com_support_polygon = custom_rewards.com_support_polygon(self)
         feet_vertical_surface_contacts = custom_rewards.feet_vertical_surface_contacts(self)
+        feet_landing_vel_l2 = custom_rewards.feet_landing_vel_l2(self)
+        feet_edge_stance = custom_rewards.feet_edge_stance(self)
+        feet_edge_swing = custom_rewards.feet_edge_swing(self)
+        feet_swing_trajectory_periodic = custom_rewards.feet_swing_trajectory_periodic(self)
+        feet_swing_trajectory_aperiodic = custom_rewards.feet_swing_trajectory_aperiodic(self)
 
         rewards = {
             "track_height_exp": track_height_exp * self.cfg.height_reward_scale * self.step_dt,
@@ -543,10 +610,15 @@ class FaultLocomotionEnv(DirectRLEnv):
 
             "feet_height_clearance_aperiodic": feet_height_clearance_aperiodic * self.cfg.feet_height_clearance_aperiodic_reward_scale * self.step_dt,
             "feet_height_clearance_periodic": feet_height_clearance_periodic * self.cfg.feet_height_clearance_periodic_reward_scale * self.step_dt,
+            "feet_swing_trajectory_periodic": feet_swing_trajectory_periodic * self.cfg.feet_swing_trajectory_periodic_reward_scale * self.step_dt,
+            "feet_swing_trajectory_aperiodic": feet_swing_trajectory_aperiodic * self.cfg.feet_swing_trajectory_aperiodic_reward_scale * self.step_dt,
 
             "feet_slide": feet_slide * self.cfg.feet_slide_reward_scale * self.step_dt,
+            "feet_landing_vel_l2": feet_landing_vel_l2 * self.cfg.feet_landing_vel_reward_scale * self.step_dt,
             "feet_to_hip_distance_l2": feet_to_hip_distance_l2 * self.cfg.feet_to_hip_distance_reward_scale * self.step_dt,
             "com_support_polygon": com_support_polygon * self.cfg.com_support_polygon_reward_scale * self.step_dt,
+            "feet_edge_stance": feet_edge_stance * self.cfg.feet_edge_stance_reward_scale * self.step_dt,
+            "feet_edge_swing": feet_edge_swing * getattr(self.cfg, "feet_edge_swing_reward_scale", 0.0) * self.step_dt,
             "feet_vertical_surface_contacts": feet_vertical_surface_contacts * self.cfg.feet_vertical_surface_contacts_reward_scale * self.step_dt,
 
             "periodic_contact_suggestion": periodic_contact_suggestion * self.cfg.periodic_contact_suggestion_reward_scale * self.step_dt,
@@ -566,6 +638,9 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        # Stored after the rewards, so that at the next step it holds the velocity before a possible touchdown
+        self._last_feet_vz[:] = self._robot.data.body_lin_vel_w[:, self._feet_ids_robot, 2]
         return reward
 
 
@@ -669,6 +744,8 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
         self._previous_previous_actions[env_ids] = 0.0
+        self._last_feet_vz[env_ids] = 0.0
+        self._filtered_actions[env_ids] = 0.0
 
         # Reset swing peak
         self._swing_peak[env_ids] = torch.tensor([0.0, 0.0, 0.0, 0.0], device=self.device)
@@ -681,8 +758,13 @@ class FaultLocomotionEnv(DirectRLEnv):
         # Reset observation history
         self._observation_history[env_ids] *= 0.0
 
+        # Resample the global height map bias
+        if self.cfg.observation_noise_model:
+            global_bias_std = self.cfg.observation_noise_std["height_map_global"][1]
+            self._height_map_global_bias[env_ids] = global_bias_std * torch.randn(len(env_ids), 1, device=self.device)
+
         # Reset obs and noise concurrent
-        if(self.cfg.use_concurrent_state_est):
+        if(self.cfg.base_state_source == "concurrent_se"):
             self._observation_history_concurrent_state_est[env_ids] *= 0.0
             if self.cfg.observation_noise_model:
                 self._observation_noise_model_concurrent_state_est.reset(env_ids)
@@ -695,6 +777,7 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
+        joint_pos += torch.zeros_like(joint_pos).uniform_(-0.2, 0.2)
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
@@ -730,3 +813,11 @@ class FaultLocomotionEnv(DirectRLEnv):
 
         # Set the event failure
         custom_events._failures_event_setter(self, env_ids, self._failure_type)
+
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        custom_visualizations._set_debug_vis_impl(self, debug_vis)
+
+
+    def _debug_vis_callback(self, event):
+        custom_visualizations._debug_vis_callback(self, event)

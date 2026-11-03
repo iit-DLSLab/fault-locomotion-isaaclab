@@ -5,7 +5,7 @@ These script integrate with morphosymm-rl to train a policy with symmetries.
 
 ## How to use Morphologycal Symmetries
 
-- To train a locomotion policy modify the related cfg file [morphosymm_cfg](./../../source/fault_locomotion_isaaclab/fault_locomotion_isaaclab/tasks/locomotion/agents/morphosymm_cfg.py) with the needed observation.
+- To train a locomotion policy modify the related cfg file [morphosymm_cfg](./../../source/fault_locomotion_isaaclab/fault_locomotion_isaaclab/tasks/fault_locomotion/agents/morphosymm_cfg.py) with the needed observation.
 
 - Check this [how to](https://github.com/iit-DLSLab/morphosymm-rl/blob/main/README_how_to.md) first!!!
 

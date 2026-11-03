@@ -283,7 +283,7 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         
 
         # Safety check to not do anything until a first base and blind state are received
-        if(config.training_env["use_imu"] or config.training_env["use_concurrent_state_est"]):
+        if(config.training_env["base_state_source"] != "ground_truth"):
             if(self.first_message_imu_arrived==False or self.first_message_joints_arrived==False):
                 return
         else:
@@ -292,7 +292,7 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         
         if self.locomotion_policy.use_vision:
             # base_state is needed to transform markers from base_link to world coordinates.
-            if not self.first_message_base_arrived or not self.first_message_heightmap_arrived:
+            if not self.first_message_heightmap_arrived:
                 return
             
         # Update the mujoco model
@@ -301,7 +301,7 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         self.mjData.qpos[0:3] = copy.deepcopy(self.position)
         self.mjData.qvel[0:3] = copy.deepcopy(self.linear_velocity)
 
-        if(config.training_env["use_imu"] or config.training_env["use_concurrent_state_est"]):
+        if(config.training_env["base_state_source"] != "ground_truth"):
             self.mjData.qpos[3:7] = copy.deepcopy(self.imu_orientation)
             self.mjData.qvel[3:6] = copy.deepcopy(self.imu_angular_velocity)
         else:
@@ -372,6 +372,8 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
                         imu_angular_velocity=self.imu_angular_velocity,
                         imu_orientation=self.imu_orientation,
                         heightmap_data=heightmap_data)
+            # Keep track of the last reference, used e.g. by goDown to interpolate from
+            self.desired_joint_pos_leg = np.array(desired_joint_pos).flatten().copy()
             
             # Impedence Loop
             Kp = locomotion_policy.Kp_walking
@@ -388,9 +390,10 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
 
         # Publish the desired joint positions to the control signal --------------------------------
         control_signal_msg = ControlSignal()
-        control_signal_msg.timestamp = float(self.get_clock().now().nanoseconds)
-        control_signal_msg.sequence_id = int(self.sequence_id % 1000)  # To avoid overflow, we reset the sequence id after it reaches a certain value
+        control_signal_msg.header.timestamp = int(self.get_clock().now().nanoseconds)
+        control_signal_msg.header.sequence_id = int(self.sequence_id % 1000)  # To avoid overflow, we reset the sequence id after it reaches a certain value
         self.sequence_id += 1
+        control_signal_msg.control_mode = 1 
         control_signal_msg.joints_position = np.array(desired_joint_pos).flatten().tolist()
         control_signal_msg.joints_velocity = np.zeros(12).tolist()
         control_signal_msg.joints_torques = np.zeros(12).tolist()

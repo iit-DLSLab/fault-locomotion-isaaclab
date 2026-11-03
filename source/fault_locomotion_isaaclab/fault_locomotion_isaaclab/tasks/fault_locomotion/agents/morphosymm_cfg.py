@@ -5,7 +5,7 @@ from dataclasses import MISSING
 
 @configclass
 class MorphologycalSymmetriesCfg:
-    """Configuration for using morphosymm-rl."""
+    """Configuration for using morphosymm-rsl-rl."""
 
     class_name: str = "MorphologycalSymmetries"
     """The class name."""
@@ -25,11 +25,22 @@ class MorphologycalSymmetriesCfg:
     robot_name = None
     """The name of the robot to use inside Morphosymm."""
 
-    schedule_fixed_to_adaptive_switch = None
-    """The number of iterations to switch from fixed to adaptive schedule for the symmetry loss. 
-    If None, then no switch will happen. If the scheduler is set to adaptive, not change will be made."""
+    state_dependent_std = False
+    """Whether the actor emits its action covariance directly, instead of learning a fixed one."""
+
+    small_init_output = True
+    """Whether to start the actor mean and the critic value with small (near-zero) initial outputs."""
+
+    symmetric_initialization = True
+    """Whether to project the actor/critic initial weights onto the symmetry-equivariant subspace."""
+
+    use_data_augmentation = False
+    """Whether to augment the rollout storage with every symmetry-group replica of each collected transition
+    (selects PPOSymmDataAugmented). If False, uses the plain equivariant PPO with no augmentation."""
 
 
+# The clock signal (sin and cos of the phase of each leg, 8 values) is not used in fault locomotion
+# (use_clock_signal = False in the env cfgs). If enabled, uncomment the clock lines below.
 # Actor OBS
 history_length = 5
 obs_space_names_actor = [
@@ -41,7 +52,8 @@ obs_space_names_actor = [
         "joints_pos",
         "joints_vel",
         "joints_pos",
-        #"clock_data",
+        #"clock_data", # periodic clock data
+        #"clock_data", # periodic clock data
         "clock_data", "clock_data", "clock_data",  # hip/thigh/calf statuses
     ]*int(history_length)
 obs_space_names_actor += ["invariant_scalar"]
@@ -57,10 +69,10 @@ obs_space_names_critic = [
         "joints_pos",
         "joints_vel",
         "joints_pos",
-        #"clock_data",
+        #"clock_data", # periodic clock data
+        #"clock_data", # periodic clock data
         "clock_data", "clock_data", "clock_data",  # hip/thigh/calf statuses
     ]*int(history_length)
-obs_space_names_critic += ["invariant_scalar"]
 obs_space_names_critic += [    
         "clock_data", "clock_data", "clock_data",  # P gains
         "clock_data", "clock_data", "clock_data",  # D gains
@@ -74,6 +86,7 @@ obs_space_names_critic += [
         "clock_data",  # foot error
 ]
 obs_space_names_critic += ["heightmap:4x4"]
+obs_space_names_critic += ["invariant_scalar"]  # expert activation, the last term of the observation
 
 
 # Action Space
@@ -89,7 +102,8 @@ joints_order = [
 
 
 # Robot Name
-robot_name = "a1"
+#robot_name = "a1" # Aliengo, Go2, A2, B2
+robot_name = "a1-mirrored-hip" # Pegasus, HyQReal
 
 
 morphologycal_symmetries_cfg = MorphologycalSymmetriesCfg(
