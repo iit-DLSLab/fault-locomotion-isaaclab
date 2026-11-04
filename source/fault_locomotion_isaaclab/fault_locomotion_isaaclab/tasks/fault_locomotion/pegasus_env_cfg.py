@@ -450,7 +450,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
 
 
     # Contact suggestion reward scale
-    periodic_contact_suggestion_reward_scale =  0.5
+    periodic_contact_suggestion_reward_scale =  0.0
     # Desired step freq and duty factor (if periodic gait contact suggestion is used)
     desired_step_freq = 1.4
     desired_step_freq_max = 1.8
