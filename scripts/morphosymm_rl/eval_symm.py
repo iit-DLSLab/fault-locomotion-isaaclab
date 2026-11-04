@@ -88,7 +88,7 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils import resolve_task_config
 
 from morphosymm_rsl_rl.runners.symm_on_policy_runner import SymmOnPolicyRunner
 # Import extensions to set up environment tasks
@@ -286,7 +286,6 @@ def _save_reward_artifacts(
     return raw_path, summary_path, saved_plot_path, summary_rows
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     """Play with RSL-RL agent."""
     # grab task name for checkpoint path
@@ -414,6 +413,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 if __name__ == "__main__":
     # run the main function
-    main()
+    main(*resolve_task_config(args_cli.task, args_cli.agent))
     # close sim app
     simulation_app.close()
