@@ -184,7 +184,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     use_varying_action_space = False # if used MoE with varying expert_output_dims, check moe_cfg.py
     observation_space += 1 # expert activation
 
-    base_state_source = "ground_truth"  # "ground_truth" | "imu" | "concurrent_se"
+    base_state_source = "concurrent_se"  # "ground_truth" | "imu" | "concurrent_se"
     if(base_state_source == "concurrent_se"):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
