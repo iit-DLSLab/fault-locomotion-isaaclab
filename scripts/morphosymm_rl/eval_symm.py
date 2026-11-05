@@ -1,6 +1,6 @@
 """Script to play a checkpoint if an RL agent from RSL-RL."""
 
-"""Launch Isaac Sim Simulator first."""
+"""Parse command-line arguments first."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ DEFAULT_MAX_EVAL_TIMESTEPS = 2000
 # Import here to avoid the pinocchio error if morphosymm import it after the import of AppLauncher.
 import pinocchio as pin
 
-from isaaclab.app import AppLauncher
+from isaaclab.app import add_launcher_args, launch_simulation
 
 # local imports
 import cli_args  # isort: skip
@@ -42,8 +42,8 @@ parser.add_argument(
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
-# append AppLauncher cli args
-AppLauncher.add_app_launcher_args(parser)
+# append simulation launcher cli args
+add_launcher_args(parser)
 # parse the arguments
 args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
@@ -53,9 +53,6 @@ if args_cli.video:
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
 
-# launch omniverse app
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
@@ -88,7 +85,7 @@ from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_che
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils import resolve_task_config
 
 from morphosymm_rsl_rl.runners.symm_on_policy_runner import SymmOnPolicyRunner
 # Import extensions to set up environment tasks
@@ -286,7 +283,6 @@ def _save_reward_artifacts(
     return raw_path, summary_path, saved_plot_path, summary_rows
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     """Play with RSL-RL agent."""
     # grab task name for checkpoint path
@@ -369,7 +365,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     eval_failure_modes = _failure_modes_from_obs(obs)
 
     # simulate environment
-    while simulation_app.is_running() and timestep < args_cli.max_eval_timesteps:
+    while env.unwrapped.sim.is_running() and timestep < args_cli.max_eval_timesteps:
         start_time = time.time()
         # run everything in inference mode
         with torch.inference_mode():
@@ -414,6 +410,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 if __name__ == "__main__":
     # run the main function
-    main()
-    # close sim app
-    simulation_app.close()
+    env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+    # start only the runtime the task needs (Kit is launched only for PhysX / Kit visualizers)
+    with launch_simulation(env_cfg, args_cli):
+        main(env_cfg, agent_cfg)
