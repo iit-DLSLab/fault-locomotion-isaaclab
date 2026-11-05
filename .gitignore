@@ -46,3 +46,5 @@ deploy/ros1_ws/install/
 
 # Usd
 source/fault_locomotion_isaaclab/assets/pegasus_asset/
+# Pixi
+.pixi/
