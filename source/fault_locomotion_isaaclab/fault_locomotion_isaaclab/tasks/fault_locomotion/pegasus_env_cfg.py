@@ -61,7 +61,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "mass_distribution_params": (-10.0, 5.0),
+            "mass_distribution_params": (-5.0, 5.0),
             "operation": "add",
         },
     )
@@ -184,7 +184,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     use_varying_action_space = False # if used MoE with varying expert_output_dims, check moe_cfg.py
     observation_space += 1 # expert activation
 
-    base_state_source = "concurrent_se"  # "ground_truth" | "imu" | "concurrent_se"
+    base_state_source = "ground_truth"  # "ground_truth" | "imu" | "concurrent_se"
     if(base_state_source == "concurrent_se"):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
@@ -361,7 +361,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
 
 
     # Desired tracking variables
-    desired_base_height = 0.55
+    desired_base_height = 0.60
     # Desired front-hip height above local terrain (used for two_legs front-hip tracking)
     desired_front_hip_height = 0.45
     desired_feet_height = 0.05
