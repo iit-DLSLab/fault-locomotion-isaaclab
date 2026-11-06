@@ -43,6 +43,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from dls2_interface.msg import BaseState, BlindState, Imu, ControlSignal
 
 import time
+import gc
 import numpy as np
 np.set_printoptions(precision=3, suppress=True)
 from array import array
@@ -321,8 +322,9 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
         self.mjData.qpos[7:19] = copy.deepcopy(self.legs_joints_position)
         self.mjData.qvel[6:18] = copy.deepcopy(self.legs_joints_velocity)
         self.mjModel.opt.timestep = simulation_dt
-        mujoco.mj_forward(self.mjModel, self.mjData)
-        
+        # No mj_forward here: the controller only reads qpos/qvel, and the viewer
+        # recomputes the kinematics on its own copy in sync(state_only=True)
+
         # Safety check for joystick timeout
         if(self.last_joy_time is not None and time.time() - self.last_joy_time > 1.0):
             self.ref_base_lin_vel_H[0] = 0.0
@@ -457,23 +459,36 @@ class Basic_Locomotion_DLS_Isaaclab_Node(Node):
             RENDER_FREQ = 30
             # Render only at a certain frequency -----------------------------------------------------------------
             if time.time() - self.last_render_time > 1.0 / RENDER_FREQ:
+                # Update the heightmap spheres before sync(), so they are shown in this frame
+                if locomotion_policy.use_vision and self.heightmap.data is not None:
+                    mujoco_utils.render_spheres(
+                        viewer=self.viewer,
+                        positions=self.heightmap.data,
+                        geom_ids=self.heightmap.geom_ids,
+                        diameter=0.02,
+                        color=[0, 1, 0, 0.5],
+                    )
+
                 self.viewer.cam.lookat[:] = base_pos
-                self.viewer.sync()
+                # state_only: copy only the state (qpos, qvel, ...) and let the viewer run mj_forward
+                self.viewer.sync(state_only=True)
                 self.last_render_time = time.time()
 
-                if locomotion_policy.use_vision and self.heightmap.data is not None:
-                    for i in range(self.heightmap.data.shape[0]):
-                        for j in range(self.heightmap.data.shape[1]):
-                            self.heightmap.geom_ids[i, j] = mujoco_utils.render_sphere(
-                                viewer=self.viewer,
-                                position=self.heightmap.data[i, j, 0],
-                                diameter=0.02,
-                                color=[0, 1, 0, 0.5],
-                                geom_id=self.heightmap.geom_ids[i, j],
-                            )
 
 
 
+
+def create_executor():
+    # EventsExecutor dispatches the callbacks in C++ (rclpy >= Kilted), with much less overhead than the
+    # default SingleThreadedExecutor. It does not exist on Humble, where we fall back to SingleThreadedExecutor
+    try:
+        from rclpy.experimental import EventsExecutor
+        print("Using EventsExecutor")
+        return EventsExecutor()
+    except ImportError:
+        from rclpy.executors import SingleThreadedExecutor
+        print("EventsExecutor not available in this ROS 2 distro, using SingleThreadedExecutor")
+        return SingleThreadedExecutor()
 
 
 #---------------------------
@@ -483,7 +498,12 @@ if __name__ == '__main__':
     
     rclpy.init()
     basic_locomotion_dls_isaaclab_node = Basic_Locomotion_DLS_Isaaclab_Node()
-    rclpy.spin(basic_locomotion_dls_isaaclab_node)
+    # Move everything allocated at startup (modules, model, policy, node) out of the garbage collector:
+    # otherwise its full collections scan all of them and stall the control loop for tens of ms
+    gc.collect()
+    gc.freeze()
+
+    rclpy.spin(basic_locomotion_dls_isaaclab_node, create_executor())
     
     basic_locomotion_dls_isaaclab_node.destroy_node()
     rclpy.shutdown()
