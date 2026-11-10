@@ -459,7 +459,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     desired_duty_factor = 0.65
     desired_phase_offset = [0.0, 0.5, 0.5, 0.0] #FL, FR, RL, RR
 
-    stance_contact_suggestion_reward_scale = 0.5
+    stance_contact_suggestion_reward_scale = 1.0
     
 
     # Feet reward scale
@@ -481,7 +481,9 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     desired_hip_offset_x = 0.112
 
     com_support_polygon_reward_scale = 1.0
-    com_support_polygon_margin = 0.03
+    # Distance of the COM from the closest edge of the support triangle at which com_support_polygon saturates [m]:
+    # the reward grows linearly from 0 on the edge to 1 here, and stays at 1 further inside
+    com_support_polygon_margin = 0.12
     
     feet_edge_stance_reward_scale = 0.0
     feet_edge_swing_reward_scale = -1.0

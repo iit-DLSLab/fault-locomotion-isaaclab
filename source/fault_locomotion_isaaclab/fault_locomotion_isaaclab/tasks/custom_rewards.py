@@ -207,7 +207,7 @@ def track_orientation_l2(self):
     root_pitch_w = torch.atan2(torch.sin(root_pitch_w), torch.cos(root_pitch_w))
 
     base_orientation_pitch = torch.square(terrain_pitch - root_pitch_w)
-    base_orientation_pitch = torch.where(
+    """base_orientation_pitch = torch.where(
         (num_legs_down == 1) & (legs_down[:, 0] | legs_down[:, 1]),
         torch.square(terrain_pitch - 0.05 - root_pitch_w),
         base_orientation_pitch,
@@ -216,7 +216,7 @@ def track_orientation_l2(self):
         (num_legs_down == 1) & (legs_down[:, 2] | legs_down[:, 3]),
         torch.square(terrain_pitch + 0.05 - root_pitch_w),
         base_orientation_pitch,
-    )
+    )"""
     # With two legs down the pitch is free, apart from the lateral case (fl_rl, fr_rr) where instead the robot has to roll
     lateral_legs_down = ((legs_down[:, 0] & legs_down[:, 2]) | (legs_down[:, 1] & legs_down[:, 3])) & (num_legs_down == 2)
     base_orientation_pitch = torch.where(
@@ -635,6 +635,12 @@ def feet_to_hip_distance_l2(self):
 
 
 def com_support_polygon(self):
+    """With one leg down, reward the COM for staying inside the triangle of the three healthy feet.
+
+    Continuous in the distance of the COM from the closest edge of the triangle: 0 on the edge (or outside),
+    growing linearly up to 1 at com_support_polygon_margin, and constant after it. The policy is pushed away
+    from the edge (e.g. the healthy diagonal) but gains nothing by moving the COM further inside.
+    """
     legs_status = (self._per_leg_joint_status.all(dim=2)).float()
     legs_status = legs_status.reshape(legs_status.shape[0], -1)
     legs_down = ~legs_status.bool()
@@ -656,39 +662,32 @@ def com_support_polygon(self):
     support_b = support_feet_xy[:, 1]
     support_c = support_feet_xy[:, 2]
 
-    v0 = support_c - support_a
-    v1 = support_b - support_a
-    v2 = robot_com_xy - support_a
-    dot00 = torch.sum(v0 * v0, dim=1)
-    dot01 = torch.sum(v0 * v1, dim=1)
-    dot02 = torch.sum(v0 * v2, dim=1)
-    dot11 = torch.sum(v1 * v1, dim=1)
-    dot12 = torch.sum(v1 * v2, dim=1)
-    barycentric_den = dot00 * dot11 - dot01 * dot01
-    valid_support_polygon = torch.abs(barycentric_den) > 1.0e-6
-
-    inv_den = 1.0 / barycentric_den.clamp(min=1.0e-6)
-    u = (dot11 * dot02 - dot01 * dot12) * inv_den
-    v = (dot00 * dot12 - dot01 * dot02) * inv_den
-    com_inside_support_polygon = valid_support_polygon & (u >= 0.0) & (v >= 0.0) & (u + v <= 1.0)
-
     edge_ab = support_b - support_a
     edge_bc = support_c - support_b
     edge_ca = support_a - support_c
     com_to_a = robot_com_xy - support_a
     com_to_b = robot_com_xy - support_b
     com_to_c = robot_com_xy - support_c
-    distance_ab = torch.abs(edge_ab[:, 0] * com_to_a[:, 1] - edge_ab[:, 1] * com_to_a[:, 0])
+
+    # Twice the signed area of the triangle: its sign (counterclockwise or clockwise feet order) makes the
+    # edge distances below positive inside the triangle and negative outside
+    double_area = edge_ab[:, 0] * (support_c - support_a)[:, 1] - edge_ab[:, 1] * (support_c - support_a)[:, 0]
+    valid_support_polygon = torch.abs(double_area) > 1.0e-6
+    orientation = torch.sign(double_area)
+
+    distance_ab = (edge_ab[:, 0] * com_to_a[:, 1] - edge_ab[:, 1] * com_to_a[:, 0]) * orientation
     distance_ab = distance_ab / torch.linalg.norm(edge_ab, dim=1).clamp(min=1.0e-6)
-    distance_bc = torch.abs(edge_bc[:, 0] * com_to_b[:, 1] - edge_bc[:, 1] * com_to_b[:, 0])
+    distance_bc = (edge_bc[:, 0] * com_to_b[:, 1] - edge_bc[:, 1] * com_to_b[:, 0]) * orientation
     distance_bc = distance_bc / torch.linalg.norm(edge_bc, dim=1).clamp(min=1.0e-6)
-    distance_ca = torch.abs(edge_ca[:, 0] * com_to_c[:, 1] - edge_ca[:, 1] * com_to_c[:, 0])
+    distance_ca = (edge_ca[:, 0] * com_to_c[:, 1] - edge_ca[:, 1] * com_to_c[:, 0]) * orientation
     distance_ca = distance_ca / torch.linalg.norm(edge_ca, dim=1).clamp(min=1.0e-6)
+    # Signed distance from the closest edge: > 0 inside the triangle, <= 0 on the edge or outside
     min_distance_to_support_edge = torch.minimum(torch.minimum(distance_ab, distance_bc), distance_ca)
 
-    com_support_polygon = (
-        com_inside_support_polygon & (min_distance_to_support_edge >= self.cfg.com_support_polygon_margin)
-    ).float() * (num_legs_down == 1).float()
+    com_support_polygon = torch.clamp(
+        min_distance_to_support_edge / self.cfg.com_support_polygon_margin, min=0.0, max=1.0
+    )
+    com_support_polygon = com_support_polygon * valid_support_polygon.float() * (num_legs_down == 1).float()
 
     return com_support_polygon
 
