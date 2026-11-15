@@ -64,21 +64,24 @@ algorithm:
 policy: {}
 moe_cfg:
   class_name: MixtureOfExpert
-  who: actor+critic
-  num_experts: 4
-  gate_hidden_dims:
-  - 128
-  top_k: null
-  use_gate_loss: false
-  use_load_balance_loss: false
-  use_explicit_expert: true
-  use_shared_layers: backbone
-  use_pcgrad: true
-  expert_output_dims:
-  - 12
-  - 9
-  - 9
-  - 6
+  decomposition: state
+  state_decomposition_cfg:
+    who: actor+critic
+    num_experts: 4
+    gate_hidden_dims:
+    - 128
+    top_k: null
+    use_gate_loss: false
+    use_load_balance_loss: false
+    use_explicit_expert: true
+    use_shared_layers: backbone
+    use_pcgrad: true
+    expert_output_dims:
+    - 12
+    - 9
+    - 9
+    - 6
+  reward_decomposition_cfg: null
 morphologycal_symmetries_cfg:
   class_name: MorphologycalSymmetries
   obs_space_names_actor:

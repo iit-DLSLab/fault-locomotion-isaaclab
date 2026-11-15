@@ -99,6 +99,13 @@ class LocomotionPolicyWrapper:
         # vision policies are the ones trained with the perceptive height scanner
         self.use_vision = config.training_env.get("perceptive_height_scanner") is not None
 
+        # MoE with explicit routing (moe-rsl-rl state decomposition): the expert index is the last observation entry
+        moe_cfg = config.training_agent["moe_cfg"]
+        self.use_explicit_expert = (
+            "state" in moe_cfg["decomposition"].split("+")
+            and moe_cfg["state_decomposition_cfg"]["use_explicit_expert"] == True
+        )
+
 
         # RMA
         if(config.training_env["use_rma"] == True):
@@ -378,7 +385,7 @@ class LocomotionPolicyWrapper:
             height_data = height_data.clip(-1.0, 1.0)
             obs = np.concatenate((obs, height_data), axis=0)
 
-        if(config.training_agent["moe_cfg"]["use_explicit_expert"] == True):
+        if(self.use_explicit_expert):
             legs_status =  self._policy_per_leg_joint_status.astype(dtype=bool).reshape(1, 4, 3).all(axis=2)
             legs_status = legs_status.reshape(legs_status.shape[0], -1)
             legs_down = ~legs_status
@@ -397,7 +404,7 @@ class LocomotionPolicyWrapper:
         obs = obs.reshape(1, -1)
         obs = obs.astype(np.float32)
         rl_action_temp = self.policy.run(None, {'obs': obs})[0][0]
-        if(config.training_agent["moe_cfg"]["use_explicit_expert"] == True and config.training_env["use_varying_action_space"] == True):
+        if(self.use_explicit_expert and config.training_env["use_varying_action_space"] == True):
             rl_action_temp = self._rearrange_explicit_expert_actions(rl_action_temp)
         rl_action_temp = np.clip(rl_action_temp, -self.desired_clip_actions, self.desired_clip_actions)
         
