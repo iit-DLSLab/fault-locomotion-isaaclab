@@ -5,7 +5,7 @@
 
 
 from isaaclab.utils.configclass import configclass
-from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg, RslRlSymmetryCfg
 
 from pathlib import Path
 from dataclasses import MISSING
@@ -13,6 +13,18 @@ from dataclasses import MISSING
 from copy import deepcopy
 from . import moe_cfg
 from . import morphosymm_cfg
+from . import rsl_rl_symmetry
+
+# Left-right symmetry: every mini-batch also contains the mirror of its samples (see rsl_rl_symmetry.py), also with
+# the explicit experts and the varying action space. Used by the rsl_rl and moe_rsl_rl runners, not by morphosymm_rl
+# (its networks are symmetric by construction). The mirror loss is logged (Loss/symmetry) even with
+# use_mirror_loss=False, as a measure of how symmetric the policy is.
+SYMMETRY_CFG = RslRlSymmetryCfg(
+    use_data_augmentation=True,
+    use_mirror_loss=False,
+    mirror_loss_coeff=0.0,
+    data_augmentation_func=rsl_rl_symmetry.compute_symmetric_states,
+)
 
 
 @configclass
@@ -46,6 +58,7 @@ class FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+        symmetry_cfg=SYMMETRY_CFG,
     )
 
     # Mixture of Expert Stuff
@@ -88,6 +101,7 @@ class RoughPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+        symmetry_cfg=SYMMETRY_CFG,
     )
 
     # Mixture of Expert Stuff

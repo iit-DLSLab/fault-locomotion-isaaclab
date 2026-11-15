@@ -37,6 +37,29 @@ from .pegasus_env_cfg import PegasusFlatEnvCfg, PegasusRoughVisionEnvCfg, Pegasu
 
 from fault_locomotion_isaaclab.tasks.supervised_learning_networks import create_supervised_network
 
+
+def varying_action_source_ids(legs_down: torch.Tensor) -> torch.Tensor:
+    """Indices that bring the actions of the varying action space (cfg.use_varying_action_space) to
+    cfg.desired_joints_order (all hips, all thighs, all calves): joint_actions = actions.gather(1, ids).
+
+    The experts with a failure output the actions grouped per leg [hip, thigh, calf]: first the working legs, then
+    the failed ones (zero padded), both in FL, FR, RL, RR order. E.g.
+    fl_down -> [FR, RL, RR, FL], rl_rr_down -> [FL, FR, RL, RR], fl_rr_down -> [FR, RL, FL, RR].
+    Without failures the actions are already in cfg.desired_joints_order.
+
+    Args:
+        legs_down: The failed legs in FL, FR, RL, RR order, shape (N, 4).
+
+    Returns:
+        The indices, shape (N, 12).
+    """
+    leg_slot = torch.argsort(torch.argsort(legs_down.int(), dim=1, stable=True), dim=1)
+    joint_in_leg = torch.arange(3, device=legs_down.device).view(1, 3, 1)
+    per_leg_ids = (3 * leg_slot.unsqueeze(1) + joint_in_leg).reshape(legs_down.shape[0], -1)
+    joint_order_ids = torch.arange(per_leg_ids.shape[1], device=legs_down.device).expand_as(per_leg_ids)
+    return torch.where(legs_down.any(dim=1, keepdim=True), per_leg_ids, joint_order_ids)
+
+
 class FaultLocomotionEnv(DirectRLEnv):
 
     def __init__(self, cfg, render_mode: str | None = None, **kwargs):
@@ -334,24 +357,13 @@ class FaultLocomotionEnv(DirectRLEnv):
         self._previous_actions = self._actions.clone()
 
 
-        #rearrange actions if explicit expert with use_varying_action_space 
+        #rearrange actions if explicit expert with use_varying_action_space
         #to change with the number of experts, the action space you choose etc
         if(getattr(self.cfg, "use_varying_action_space", False)):
             # The status seen by the policy when it computed these actions (RMA prediction if used)
-            legs_status =  (self._policy_per_leg_joint_status.all(dim=2)).float()
-            legs_status = legs_status.reshape(legs_status.shape[0], -1)
-            legs_down = ~legs_status.bool()
-            num_legs_down = legs_down.sum(dim=1)
-
-            # The experts with a failure output the actions grouped per leg [hip, thigh, calf]: first the working
-            # legs, then the failed ones (zero padded), both in FL, FR, RL, RR order. E.g.
-            # fl_down -> [FR, RL, RR, FL], rl_rr_down -> [FL, FR, RL, RR], fl_rr_down -> [FR, RL, FL, RR]
-            # Here we bring them back to cfg.desired_joints_order (all hips, all thighs, all calves).
+            legs_down = ~self._policy_per_leg_joint_status.bool().all(dim=2)
             # Not done in place, otherwise we would also modify the actions stored by the runner
-            leg_slot = torch.argsort(torch.argsort(legs_down.int(), dim=1, stable=True), dim=1)
-            joint_in_leg = torch.arange(3, device=self.device).view(1, 3, 1)
-            source_ids = (3 * leg_slot.unsqueeze(1) + joint_in_leg).reshape(legs_down.shape[0], -1)
-            actions = torch.where((num_legs_down > 0).unsqueeze(1), torch.gather(actions, 1, source_ids), actions)
+            actions = torch.gather(actions, 1, varying_action_source_ids(legs_down))
 
 
         self._actions = actions.clone()
