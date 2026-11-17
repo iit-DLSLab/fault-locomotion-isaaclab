@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import os
+
 import torch
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
 
 from . import custom_events, custom_rewards
+
+
+def _supervised_network_path(self, filename):
+    # Inside the run folder (logs/rsl_rl/<experiment>/<run>/exported), next to the exported policy, when the
+    # train script set cfg.log_dir. Otherwise in the current folder, as before
+    log_dir = getattr(self.cfg, "log_dir", None)
+    if log_dir is None:
+        return filename
+    return os.path.join(log_dir, "exported", filename)
 
 
 def _get_concurrent_state_estimation(self):
@@ -46,6 +57,13 @@ def _get_concurrent_state_estimation(self):
         with torch.no_grad(): 
             prediction_concurrent_state_est = self._concurrent_state_est_network(obs_concurrent_state_est)
         linear_velocity_b = prediction_concurrent_state_est[:, :3]
+        # Optional smooth transition: in the first interval after the start, blend ground truth
+        # and prediction with a weight alpha on the ground truth decreasing linearly from 1 to 0
+        if getattr(self.cfg, "concurrent_state_est_blend_transition", False):
+            progress = (num_episode_from_start - self.cfg.concurrent_state_est_ep_saving_start) / self.cfg.concurrent_state_est_ep_saving_interval
+            alpha = max(0.0, 1.0 - progress)
+            if alpha > 0.0:
+                linear_velocity_b = alpha * self._robot.data.root_lin_vel_b + (1.0 - alpha) * linear_velocity_b
     else:
         linear_velocity_b = self._robot.data.root_lin_vel_b
 
@@ -57,7 +75,7 @@ def _get_concurrent_state_estimation(self):
                                                         epochs=self.cfg.concurrent_state_est_train_epochs, 
                                                         learning_rate=self.cfg.concurrent_state_est_lr, device=self.device)
         # Save the network
-        self._concurrent_state_est_network.save_network("concurrent_state_estimator.pth", self.device)    
+        self._concurrent_state_est_network.save_network(_supervised_network_path(self, "concurrent_state_estimator.pth"), self.device)    
 
     return linear_velocity_b  
 
@@ -128,7 +146,7 @@ def _get_rma(self):
                                         device=self.device,
                                         loss_type="binary_cross_entropy_with_logits")
         # Save the network
-        self._rma_network.save_network("rma.pth", self.device)
+        self._rma_network.save_network(_supervised_network_path(self, "rma.pth"), self.device)
 
     return obs_rma
 

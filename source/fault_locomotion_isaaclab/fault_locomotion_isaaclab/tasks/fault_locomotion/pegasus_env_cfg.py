@@ -184,7 +184,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     use_varying_action_space = False # if used MoE with varying expert_output_dims, check moe_cfg.py
     observation_space += 1 # expert activation
 
-    base_state_source = "ground_truth"  # "ground_truth" | "imu" | "concurrent_se"
+    base_state_source = "concurrent_se"  # "ground_truth" | "imu" | "concurrent_se"
     if(base_state_source == "concurrent_se"):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
@@ -204,8 +204,11 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
         concurrent_state_est_train_epochs = 1000
         concurrent_state_est_lr = 1e-3
         concurrent_state_est_ep_saving_interval = 1000
-        concurrent_state_est_ep_saving_start = 6000
-        concurrent_state_est_ep_saving_end = 8000
+        concurrent_state_est_ep_saving_start = 8000
+        concurrent_state_est_ep_saving_end = 12000
+        # If True, between ep_saving_start and ep_saving_start + ep_saving_interval the velocity
+        # fed to the policy blends ground truth and SE prediction with a decreasing alpha on ground truth
+        concurrent_state_est_blend_transition = True
 
 
     use_rma = False
@@ -491,7 +494,7 @@ class PegasusFlatEnvCfg(DirectRLEnvCfg):
     com_support_polygon_reward_scale = 1.0
     # Distance of the COM from the closest edge of the support triangle at which com_support_polygon saturates [m]:
     # the reward grows linearly from 0 on the edge to 1 here, and stays at 1 further inside
-    com_support_polygon_margin = 0.12
+    com_support_polygon_margin = 0.10
     
     feet_edge_stance_reward_scale = 0.0
     feet_edge_swing_reward_scale = -1.0
